@@ -1,0 +1,4 @@
+requests>=2.28.0
+yt-dlp>=2024.8.0
+PyQt5>=5.15.0
+fake-useragent>=1.4.0

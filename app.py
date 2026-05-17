@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 import sys
 import threading
@@ -33,7 +35,10 @@ class DownloadWorker(QObject):
         download_video: bool,
         download_thumb: bool,
         quality: str,
+        thumb_locales: list[str],
         cancel_event: threading.Event,
+        anti_ban_config: dict | None = None,
+        max_workers: int = 1,
     ) -> None:
         super().__init__()
         self._url = url
@@ -42,7 +47,10 @@ class DownloadWorker(QObject):
         self._download_video = download_video
         self._download_thumb = download_thumb
         self._quality = quality
+        self._thumb_locales = thumb_locales
         self._cancel_event = cancel_event
+        self._anti_ban_config = anti_ban_config
+        self._max_workers = max_workers
 
     def run(self) -> None:
         try:
@@ -53,9 +61,12 @@ class DownloadWorker(QObject):
                 download_video=self._download_video,
                 download_thumb=self._download_thumb,
                 quality=self._quality,
+                thumb_locales=self._thumb_locales,
                 on_progress=self.progress.emit,
                 on_log=self.log_line.emit,
                 cancelled=self._cancel_event.is_set,
+                anti_ban_config=self._anti_ban_config,
+                max_workers=self._max_workers,
             )
             self.finished.emit(ok, fail)
         except Exception as exc:
@@ -81,6 +92,8 @@ class MainWindow(QWidget):
         self._start_btn.clicked.connect(self._start)
         self._cancel_btn.clicked.connect(self._cancel)
         self._btn_clear_idle.clicked.connect(self._clear_idle)
+        self._cb_thumb.toggled.connect(lambda _c: self._sync_thumb_locale_widgets())
+        self._sync_thumb_locale_widgets()
 
         # Cập nhật logic cho quality pills (chỉ chọn 1)
         for b in self._quality_buttons:
@@ -91,6 +104,12 @@ class MainWindow(QWidget):
             if b != btn:
                 b.setChecked(False)
         btn.setChecked(True)
+
+    def _sync_thumb_locale_widgets(self) -> None:
+        thumb_on = self._cb_thumb.isChecked()
+        self._thumb_locale_label.setEnabled(thumb_on)
+        self._cb_thumb_locale_en.setEnabled(thumb_on)
+        self._cb_thumb_locale_ko.setEnabled(thumb_on)
 
     def _get_selected_quality(self) -> str:
         for b in self._quality_buttons:
@@ -151,6 +170,13 @@ class MainWindow(QWidget):
 
         quality = self._get_selected_quality()
 
+        thumb_locales: list[str] = []
+        if dl_thumb:
+            if self._cb_thumb_locale_en.isChecked():
+                thumb_locales.append("en")
+            if self._cb_thumb_locale_ko.isChecked():
+                thumb_locales.append("ko")
+
         self._cancel_event.clear()
         self._log.clear()
         self._progress.setMaximum(1)
@@ -165,6 +191,27 @@ class MainWindow(QWidget):
         self._start_btn.setEnabled(False)
         self._cancel_btn.setEnabled(True)
 
+        proxy_list = []
+        proxy_text = self._proxy_edit.text().strip() if hasattr(self, '_proxy_edit') else ""
+        if proxy_text:
+            proxy_list = [p.strip() for p in proxy_text.split(",") if p.strip()]
+
+        max_workers = self._thread_spin.value() if hasattr(self, '_thread_spin') else 1
+
+        anti_ban_config = {
+            "min_delay": 5.5,
+            "max_delay": 15.0,
+            "rate_limit": 5_000_000,
+            "proxy_list": proxy_list if proxy_list else None,
+            "vpn_enabled": self._cb_vpn.isChecked() if hasattr(self, '_cb_vpn') else False,
+            "vpn_change_interval": 30,
+            "use_fake_ua": True,
+            "max_retries": 3,
+        }
+
+        if max_workers > 1:
+            self._log.appendPlainText(f"Sử dụng {max_workers} threads để tải song song")
+
         self._thread = QThread()
         self._worker = DownloadWorker(
             url=url,
@@ -173,7 +220,10 @@ class MainWindow(QWidget):
             download_video=dl_video,
             download_thumb=dl_thumb,
             quality=quality,
-            cancel_event=self._cancel_event
+            thumb_locales=thumb_locales,
+            cancel_event=self._cancel_event,
+            anti_ban_config=anti_ban_config,
+            max_workers=max_workers,
         )
         self._worker.moveToThread(self._thread)
 

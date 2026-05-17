@@ -157,6 +157,19 @@ def setup_thumb_download_ui(win: QWidget) -> None:
     chk_row.addWidget(cb_thumb)
     chk_row.addStretch(1)
 
+    thumb_loc_row = QHBoxLayout()
+    thumb_loc_row.setSpacing(14)
+    thumb_loc_lab = QLabel("Thumb — tên file theo ngôn ngữ:")
+    thumb_loc_lab.setStyleSheet("color:#374151;font-size:13px;")
+    cb_thumb_locale_en = QCheckBox("Tiếng Anh (en)")
+    cb_thumb_locale_ko = QCheckBox("Tiếng Hàn (ko)")
+    cb_thumb_locale_en.setChecked(True)
+    cb_thumb_locale_ko.setChecked(True)
+    thumb_loc_row.addWidget(thumb_loc_lab, alignment=Qt.AlignVCenter)
+    thumb_loc_row.addWidget(cb_thumb_locale_en, alignment=Qt.AlignVCenter)
+    thumb_loc_row.addWidget(cb_thumb_locale_ko, alignment=Qt.AlignVCenter)
+    thumb_loc_row.addStretch(1)
+
     conc_row = QHBoxLayout()
     conc_row.setSpacing(8)
     conc_lab = QLabel("Tải đồng thời tối đa")
@@ -164,7 +177,6 @@ def setup_thumb_download_ui(win: QWidget) -> None:
     spin = QSpinBox()
     spin.setRange(1, 16)
     spin.setValue(2)
-    spin.setEnabled(False)
     suffix = QLabel("mục cùng lúc")
     suffix.setStyleSheet("color:#6b7280;font-size:12px;")
     conc_row.addWidget(conc_lab)
@@ -174,6 +186,7 @@ def setup_thumb_download_ui(win: QWidget) -> None:
 
     set_outer.addLayout(qual_row)
     set_outer.addLayout(chk_row)
+    set_outer.addLayout(thumb_loc_row)
     set_outer.addLayout(conc_row)
 
     # —— HÀNG ĐỢI ——
@@ -283,3 +296,7 @@ def setup_thumb_download_ui(win: QWidget) -> None:
     win._quality_buttons = quality_buttons
     win._cb_video = cb_video
     win._cb_thumb = cb_thumb
+    win._thumb_locale_label = thumb_loc_lab
+    win._cb_thumb_locale_en = cb_thumb_locale_en
+    win._cb_thumb_locale_ko = cb_thumb_locale_ko
+    win._thread_spin = spin
