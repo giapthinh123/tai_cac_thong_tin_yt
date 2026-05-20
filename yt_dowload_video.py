@@ -50,6 +50,41 @@ def clean_filename(name: str) -> str:
     return re.sub(r'[\\/*?:"<>|]', "", name)
 
 
+def get_existing_titles(folder: str) -> tuple[set[str], int]:
+    """
+    Quét thư mục lưu trữ:
+    - Trả về set các tiêu đề video (dưới dạng chữ thường, đã làm sạch để so sánh).
+    - Trả về số thứ tự (index) lớn nhất hiện tại từ các file có dạng '### - Title.ext'.
+    Quét đệ quy để hỗ trợ các thư mục con (ví dụ: locale).
+    """
+    existing_titles = set()
+    max_idx = 0
+    if not folder or not os.path.exists(folder):
+        return existing_titles, max_idx
+
+    # Pattern khớp với '### - Title.ext' hoặc '###_Title.ext'
+    pattern = re.compile(r"^(\d+)\s*[-_]\s*(.*?)\.[a-zA-Z0-9]+$")
+    try:
+        for root, dirs, files in os.walk(folder):
+            for name in files:
+                match = pattern.match(name)
+                if match:
+                    idx_str, title = match.groups()
+                    try:
+                        idx = int(idx_str)
+                        if idx > max_idx:
+                            max_idx = idx
+                    except ValueError:
+                        pass
+                    existing_titles.add(title.strip().lower())
+                else:
+                    base, _ = os.path.splitext(name)
+                    existing_titles.add(base.strip().lower())
+    except Exception:
+        pass
+    return existing_titles, max_idx
+
+
 def _normalize_entries(info: dict[str, Any]) -> list[dict[str, Any]]:
     """Trả về danh sách entry phẳng: mỗi phần tử có id (video_id) và title."""
     entries = info.get("entries")
@@ -621,6 +656,14 @@ def download_job_batch(
     if download_thumb and t_target and thumb_locale_codes:
         log(f"Thumbnail theo ngôn ngữ (thư mục con): {', '.join(thumb_locale_codes)}")
 
+    master_folder = v_target if (download_video and v_target) else (t_target if (download_thumb and t_target) else "")
+    existing_titles, max_idx = get_existing_titles(master_folder)
+    if existing_titles:
+        log(f"[Resume] Phát hiện {len(existing_titles)} file đã tải trong thư mục. Index lớn nhất hiện tại: {max_idx}")
+
+    next_idx = max_idx + 1
+    lock_idx = threading.Lock()
+
     total = len(videos)
     ok = 0
     fail = 0
@@ -633,12 +676,29 @@ def download_job_batch(
         if is_cancelled():
             return False
 
+        # Kiểm tra trùng lặp
+        clean_title = clean_filename(title).strip().lower()
+        if clean_title in existing_titles:
+            log(f"[{i}] Bỏ qua (Đã tồn tại): {title}")
+            with lock_ok:
+                ok += 1
+                completed += 1
+                current_completed = completed
+            prog(current_completed, total)
+            return True
+
+        # Cấp số thứ tự (index) thread-safe tiếp theo
+        with lock_idx:
+            nonlocal next_idx
+            current_idx = next_idx
+            next_idx += 1
+
         item_ok = True
 
         if download_video and v_target:
-            log(f"[{i}] Đang tải video: {title}...")
+            log(f"[{i}] (File #{current_idx:03d}) Đang tải video: {title}...")
             v_success = download_single_video(
-                video_id, title, i, v_target, quality,
+                video_id, title, current_idx, v_target, quality,
                 on_log=log, cancelled=is_cancelled,
                 anti_ban=anti_ban,
                 retries=anti_ban_config.get("max_retries", 3) if anti_ban_config else 0,
@@ -646,7 +706,7 @@ def download_job_batch(
             )
             if not v_success:
                 item_ok = False
-                log(f"[{i}] Tải video thất bại: {title}")
+                log(f"[{i}] (File #{current_idx:03d}) Tải video thất bại: {title}")
                 if anti_ban_config:
                     failed_logger.log_failed_url(
                         f"https://www.youtube.com/watch?v={video_id}",
@@ -655,11 +715,11 @@ def download_job_batch(
                     )
 
         if download_thumb and t_target and not is_cancelled():
-            log(f"[{i}] Đang tải thumbnail: {title}...")
+            log(f"[{i}] (File #{current_idx:03d}) Đang tải thumbnail: {title}...")
             if api_video_dict and video_id in api_video_dict:
                 t_success = download_thumbnail_from_api(
                     api_video_dict[video_id],
-                    i,
+                    current_idx,
                     t_target,
                     thumb_locale_codes,
                     cancelled=is_cancelled,
@@ -670,7 +730,7 @@ def download_job_batch(
                     t_success = download_thumbnail_multi_locale(
                         video_id,
                         title,
-                        i,
+                        current_idx,
                         t_target,
                         thumb_locale_codes,
                         cancelled=is_cancelled,
@@ -678,22 +738,23 @@ def download_job_batch(
                         use_chrome_cookie=use_chrome_cookie,
                     )
                 else:
-                    t_success = download_thumbnail_file(video_id, title, i, t_target, max_retries=thumb_max_retries)
+                    t_success = download_thumbnail_file(video_id, title, current_idx, t_target, max_retries=thumb_max_retries)
                     
             if not t_success:
                 item_ok = False
-                log(f"[{i}] Tải thumbnail thất bại: {title}")
+                log(f"[{i}] (File #{current_idx:03d}) Tải thumbnail thất bại: {title}")
 
         with lock_ok:
             if item_ok:
                 ok += 1
-                log(f"[{i}] Hoàn thành: {title}")
+                log(f"[{i}] Hoàn thành (File #{current_idx:03d}): {title}")
             else:
                 fail += 1
 
-        nonlocal completed
-        completed += 1
-        prog(completed, total)
+        with lock_ok:
+            completed += 1
+            current_completed = completed
+        prog(current_completed, total)
         return item_ok
 
     if max_workers > 1:
