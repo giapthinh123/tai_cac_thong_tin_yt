@@ -153,8 +153,12 @@ def setup_thumb_download_ui(win: QWidget) -> None:
     cb_video.setChecked(True)
     cb_thumb = QCheckBox("Thumbnail")
     cb_thumb.setChecked(True)
+    cb_cookie = QCheckBox("Sử dụng Cookie Chrome")
+    cb_cookie.setChecked(False)
+    cb_cookie.setToolTip("Sử dụng Cookie từ Chrome để tải video giới hạn độ tuổi hoặc video riêng tư.")
     chk_row.addWidget(cb_video)
     chk_row.addWidget(cb_thumb)
+    chk_row.addWidget(cb_cookie)
     chk_row.addStretch(1)
 
     thumb_loc_row = QHBoxLayout()
@@ -312,6 +316,7 @@ def setup_thumb_download_ui(win: QWidget) -> None:
     win._quality_buttons = quality_buttons
     win._cb_video = cb_video
     win._cb_thumb = cb_thumb
+    win._cb_cookie = cb_cookie
     win._thumb_locale_label = thumb_loc_lab
     win._cb_thumb_locale_en = cb_thumb_locale_en
     win._cb_thumb_locale_ko = cb_thumb_locale_ko

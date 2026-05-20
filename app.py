@@ -51,7 +51,8 @@ def _load_settings() -> dict:
         "thumb_locale_ko": True,
         "thumb_locale_ja": True,
         "custom_locale": "",
-        "concurrent_count": 2
+        "concurrent_count": 2,
+        "use_chrome_cookie": False
     }
 
 def _save_settings(settings: dict) -> None:
@@ -85,6 +86,7 @@ class DownloadWorker(QObject):
         anti_ban_config: dict | None = None,
         max_workers: int = 1,
         retry_urls: list[str] | None = None,
+        use_chrome_cookie: bool = False,
     ) -> None:
         super().__init__()
         self._url = url
@@ -98,6 +100,7 @@ class DownloadWorker(QObject):
         self._cancel_event = cancel_event
         self._anti_ban_config = anti_ban_config
         self._max_workers = max_workers
+        self._use_chrome_cookie = use_chrome_cookie
 
     def run(self) -> None:
         try:
@@ -121,6 +124,7 @@ class DownloadWorker(QObject):
                             cancelled=self._cancel_event.is_set,
                             anti_ban_config=self._anti_ban_config,
                             max_workers=self._max_workers,
+                            use_chrome_cookie=self._use_chrome_cookie,
                         )
                         total_ok += ok
                         total_fail += fail
@@ -142,6 +146,7 @@ class DownloadWorker(QObject):
                     cancelled=self._cancel_event.is_set,
                     anti_ban_config=self._anti_ban_config,
                     max_workers=self._max_workers,
+                    use_chrome_cookie=self._use_chrome_cookie,
                 )
                 self.finished.emit(ok, fail)
         except Exception as exc:
@@ -182,6 +187,7 @@ class MainWindow(QWidget):
         # Lưu settings khi thay đổi
         self._cb_video.toggled.connect(lambda _: self._save_settings_to_file())
         self._cb_thumb.toggled.connect(lambda _: self._save_settings_to_file())
+        self._cb_cookie.toggled.connect(lambda _: self._save_settings_to_file())
         self._cb_thumb_locale_en.toggled.connect(lambda _: self._save_settings_to_file())
         self._cb_thumb_locale_ko.toggled.connect(lambda _: self._save_settings_to_file())
         self._cb_thumb_locale_ja.toggled.connect(lambda _: self._save_settings_to_file())
@@ -214,6 +220,7 @@ class MainWindow(QWidget):
         self._folder_edit.setText(s.get("thumb_folder", ""))
         self._cb_video.setChecked(s.get("download_video", True))
         self._cb_thumb.setChecked(s.get("download_thumb", True))
+        self._cb_cookie.setChecked(s.get("use_chrome_cookie", False))
         self._cb_thumb_locale_en.setChecked(s.get("thumb_locale_en", True))
         self._cb_thumb_locale_ko.setChecked(s.get("thumb_locale_ko", True))
         self._cb_thumb_locale_ja.setChecked(s.get("thumb_locale_ja", True))
@@ -230,6 +237,7 @@ class MainWindow(QWidget):
             "quality": self._get_selected_quality(),
             "download_video": self._cb_video.isChecked(),
             "download_thumb": self._cb_thumb.isChecked(),
+            "use_chrome_cookie": self._cb_cookie.isChecked(),
             "thumb_locale_en": self._cb_thumb_locale_en.isChecked(),
             "thumb_locale_ko": self._cb_thumb_locale_ko.isChecked(),
             "thumb_locale_ja": self._cb_thumb_locale_ja.isChecked(),
@@ -380,6 +388,7 @@ class MainWindow(QWidget):
             anti_ban_config=anti_ban_config,
             max_workers=max_workers,
             retry_urls=self._retry_urls if self._retry_urls else None,
+            use_chrome_cookie=self._cb_cookie.isChecked(),
         )
         self._worker.moveToThread(self._thread)
 

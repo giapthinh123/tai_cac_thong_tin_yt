@@ -21,7 +21,6 @@ from anti_ban import AntiBanManager, ExponentialBackoff, FailedURLLogger
 YDL_OPTS: dict[str, Any] = {
     "quiet": True,
     "extract_flat": True,
-    "cookiesfrombrowser": ("chrome", ),
 }
 
 # Tiêu đề thumbnail theo vùng: map mã thư mục → giá trị Accept-Language (ISO giống trình duyệt).
@@ -104,13 +103,27 @@ def _folder_name_from_info(info: dict[str, Any]) -> str:
     return "Unknown"
 
 
-def extract_videos_from_url(url: str) -> tuple[dict[str, Any], list[tuple[str, str]]]:
+def extract_videos_from_url(url: str, use_chrome_cookie: bool = False) -> tuple[dict[str, Any], list[tuple[str, str]]]:
     """
     Lấy metadata + danh sách [(video_id, cleaned_title), ...].
     Raises yt_dlp.utils.DownloadError hoặc ValueError nếu không có video.
     """
-    with yt_dlp.YoutubeDL(YDL_OPTS) as ydl:
-        info = ydl.extract_info(url, download=False)
+    ydl_opts = YDL_OPTS.copy()
+    if use_chrome_cookie:
+        ydl_opts["cookiesfrombrowser"] = ("chrome", )
+
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+    except yt_dlp.utils.DownloadError as e:
+        err_msg = str(e)
+        if "cookiesfrombrowser" in ydl_opts and ("Chrome cookie" in err_msg or "cookie" in err_msg.lower()):
+            print("[Warning] Lỗi sao chép dữ liệu cookie từ Chrome (có thể Chrome đang mở). Đang thử tải lại không dùng cookie...")
+            ydl_opts.pop("cookiesfrombrowser", None)
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+        else:
+            raise
 
     if not isinstance(info, dict):
         raise ValueError("Không đọc được metadata từ URL.")
@@ -126,18 +139,18 @@ def extract_videos_from_url(url: str) -> tuple[dict[str, Any], list[tuple[str, s
     return info, videos
 
 
-def list_videos_from_url(url: str) -> list[tuple[str, str]]:
+def list_videos_from_url(url: str, use_chrome_cookie: bool = False) -> list[tuple[str, str]]:
     """[(video_id, cleaned_title), ...] — chỉ danh sách video."""
-    _, videos = extract_videos_from_url(url)
+    _, videos = extract_videos_from_url(url, use_chrome_cookie=use_chrome_cookie)
     return videos
 
 
-def summarize_url_videos(url: str) -> tuple[int, str]:
+def summarize_url_videos(url: str, use_chrome_cookie: bool = False) -> tuple[int, str]:
     """
     Quét URL (kênh / tab / playlist / video đơn) với extract_flat.
     Trả về (số mục video, nhãn nguồn: kênh / playlist / tên).
     """
-    info, videos = extract_videos_from_url(url)
+    info, videos = extract_videos_from_url(url, use_chrome_cookie=use_chrome_cookie)
     label = _folder_name_from_info(info)
     return len(videos), label
 
@@ -180,6 +193,7 @@ def fetch_video_title_for_locale(
     *,
     fallback_title: str,
     cancelled: Callable[[], bool] | None = None,
+    use_chrome_cookie: bool = False,
 ) -> str:
     """Trích tiêu đề watch page với Accept-Language tương ứng locale."""
     is_cancelled = cancelled or (lambda: False)
@@ -195,11 +209,21 @@ def fetch_video_title_for_locale(
         "extract_flat": False,
         "noplaylist": True,
         "http_headers": {"Accept-Language": accept},
-        "cookiesfrombrowser": ("chrome", ),
     }
+    if use_chrome_cookie:
+        ydl_opts["cookiesfrombrowser"] = ("chrome", )
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+        except Exception as e:
+            err_msg = str(e)
+            if "cookiesfrombrowser" in ydl_opts and ("Chrome cookie" in err_msg or "cookie" in err_msg.lower()):
+                ydl_opts.pop("cookiesfrombrowser", None)
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(url, download=False)
+            else:
+                raise
         if isinstance(info, dict):
             t = info.get("title")
             if t is not None:
@@ -234,6 +258,7 @@ def download_thumbnail_multi_locale(
     *,
     cancelled: Callable[[], bool] | None = None,
     max_retries: int = 5,
+    use_chrome_cookie: bool = False,
 ) -> bool:
     """
     Tải thumbnail một lần, ghi vào base_folder/<locale>/ với tiêu đề theo từng ngôn ngữ.
@@ -252,6 +277,7 @@ def download_thumbnail_multi_locale(
             loc,
             fallback_title=clean_fallback,
             cancelled=cancelled,
+            use_chrome_cookie=use_chrome_cookie,
         )
         locale_folder = os.path.join(base_folder, loc)
         if not save_thumbnail_jpeg(locale_folder, index, title_loc, data):
@@ -268,6 +294,7 @@ def download_thumbnails_batch(
     on_progress: Callable[[int, int], None] | None = None,
     on_log: Callable[[str], None] | None = None,
     cancelled: Callable[[], bool] | None = None,
+    use_chrome_cookie: bool = False,
 ) -> tuple[int, int]:
     """
     Tải toàn bộ thumbnail cho URL.
@@ -283,7 +310,7 @@ def download_thumbnails_batch(
     log = on_log or (lambda _m: None)
     prog = on_progress or (lambda _c, _t: None)
 
-    info, videos = extract_videos_from_url(url)
+    info, videos = extract_videos_from_url(url, use_chrome_cookie=use_chrome_cookie)
     sub = _folder_name_from_info(info)
     target_folder = os.path.join(output_folder, sub)
     os.makedirs(target_folder, exist_ok=True)
@@ -304,7 +331,7 @@ def download_thumbnails_batch(
         prog(i, total)
         if locales:
             if download_thumbnail_multi_locale(
-                video_id, title, i, target_folder, locales, cancelled=is_cancelled, max_retries=thumb_max_retries
+                video_id, title, i, target_folder, locales, cancelled=is_cancelled, max_retries=thumb_max_retries, use_chrome_cookie=use_chrome_cookie
             ):
                 ok += 1
                 log(f"[{i}] Downloaded ({', '.join(locales)}): {title}")
@@ -404,6 +431,7 @@ def download_single_video(
     cancelled: Callable[[], bool],
     anti_ban: AntiBanManager | None = None,
     retries: int = 0,
+    use_chrome_cookie: bool = False,
 ) -> bool:
     if cancelled():
         return False
@@ -424,8 +452,9 @@ def download_single_video(
                 "postprocessor_args": {
                     "Merger+ffmpeg_o": ["-movflags", "+faststart"],
                 },
-                "cookiesfrombrowser": ("chrome", ),
             }
+            if use_chrome_cookie:
+                ydl_opts["cookiesfrombrowser"] = ("chrome", )
             ffmpeg_bin = shutil.which("ffmpeg")
             if ffmpeg_bin:
                 ydl_opts["ffmpeg_location"] = ffmpeg_bin
@@ -439,8 +468,18 @@ def download_single_video(
 
             ydl_opts["progress_hooks"] = [progress_hook]
 
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                ydl.download([url])
+            try:
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    ydl.download([url])
+            except yt_dlp.utils.DownloadError as e:
+                err_msg = str(e)
+                if "cookiesfrombrowser" in ydl_opts and ("Chrome cookie" in err_msg or "cookie" in err_msg.lower()):
+                    on_log(f"[{index}] Lỗi sao chép dữ liệu cookie từ Chrome (có thể Chrome đang mở). Đang thử tải lại không dùng cookie...")
+                    ydl_opts.pop("cookiesfrombrowser", None)
+                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                        ydl.download([url])
+                else:
+                    raise
 
             if not verify_merged_mp4(final_path):
                 cleanup_video_artifacts(output_folder, index, title)
@@ -530,6 +569,7 @@ def download_job_batch(
     cancelled: Callable[[], bool] | None = None,
     anti_ban_config: dict[str, Any] | None = None,
     max_workers: int = 1,
+    use_chrome_cookie: bool = False,
 ) -> tuple[int, int]:
     is_cancelled = cancelled or (lambda: False)
     log = on_log or (lambda _m: None)
@@ -567,7 +607,7 @@ def download_job_batch(
             api_video_dict[v['id']] = v
     except Exception as e:
         log(f"[Google API] Lỗi: {e}. Đang dùng yt-dlp dự phòng...")
-        info, videos = extract_videos_from_url(url)
+        info, videos = extract_videos_from_url(url, use_chrome_cookie=use_chrome_cookie)
         sub = _folder_name_from_info(info)
 
     v_target = video_folder if video_folder else ""
@@ -602,6 +642,7 @@ def download_job_batch(
                 on_log=log, cancelled=is_cancelled,
                 anti_ban=anti_ban,
                 retries=anti_ban_config.get("max_retries", 3) if anti_ban_config else 0,
+                use_chrome_cookie=use_chrome_cookie,
             )
             if not v_success:
                 item_ok = False
@@ -634,6 +675,7 @@ def download_job_batch(
                         thumb_locale_codes,
                         cancelled=is_cancelled,
                         max_retries=thumb_max_retries,
+                        use_chrome_cookie=use_chrome_cookie,
                     )
                 else:
                     t_success = download_thumbnail_file(video_id, title, i, t_target, max_retries=thumb_max_retries)
