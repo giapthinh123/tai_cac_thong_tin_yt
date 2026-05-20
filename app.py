@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import sys
 import threading
@@ -15,11 +16,55 @@ from PyQt5.QtWidgets import (
 from frontend import setup_thumb_download_ui
 from yt_dowload_video import download_job_batch
 
+
+import sys
+import os
+
+def get_resource_path(relative_path):
+    """Lấy đường dẫn tuyệt đối tới file, hoạt động cả khi code và khi chạy file .exe"""
+    try:
+        # sys._MEIPASS là biến môi trường PyInstaller tạo ra chứa đường dẫn thư mục tạm
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+
+    return os.path.join(base_path, relative_path)
+
+def _get_settings_path() -> str:
+    return get_resource_path("settings.json")
+
+def _load_settings() -> dict:
+    path = _get_settings_path()
+    if os.path.exists(path):
+        try:
+            with open(path, encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {
+        "video_folder": "",
+        "thumb_folder": "",
+        "quality": "720p",
+        "download_video": True,
+        "download_thumb": True,
+        "thumb_locale_en": True,
+        "thumb_locale_ko": True,
+        "thumb_locale_ja": True,
+        "custom_locale": "",
+        "concurrent_count": 2
+    }
+
+def _save_settings(settings: dict) -> None:
+    path = _get_settings_path()
+    with open(path, encoding="utf-8", mode="w") as f:
+        json.dump(settings, f, indent=4, ensure_ascii=False)
+
 def _load_stylesheet() -> str:
-    base = os.path.dirname(os.path.abspath(__file__))
-    path = os.path.join(base, "thum.qss")
+    # Sử dụng hàm get_resource_path để lấy đúng vị trí file
+    path = get_resource_path("thum.qss")
     with open(path, encoding="utf-8") as f:
         return f.read()
+
 
 class DownloadWorker(QObject):
     log_line = pyqtSignal(str)
@@ -39,9 +84,11 @@ class DownloadWorker(QObject):
         cancel_event: threading.Event,
         anti_ban_config: dict | None = None,
         max_workers: int = 1,
+        retry_urls: list[str] | None = None,
     ) -> None:
         super().__init__()
         self._url = url
+        self._retry_urls = retry_urls or []
         self._video_folder = video_folder
         self._thumb_folder = thumb_folder
         self._download_video = download_video
@@ -54,21 +101,49 @@ class DownloadWorker(QObject):
 
     def run(self) -> None:
         try:
-            ok, fail = download_job_batch(
-                self._url,
-                self._video_folder,
-                self._thumb_folder,
-                download_video=self._download_video,
-                download_thumb=self._download_thumb,
-                quality=self._quality,
-                thumb_locales=self._thumb_locales,
-                on_progress=self.progress.emit,
-                on_log=self.log_line.emit,
-                cancelled=self._cancel_event.is_set,
-                anti_ban_config=self._anti_ban_config,
-                max_workers=self._max_workers,
-            )
-            self.finished.emit(ok, fail)
+            if self._retry_urls:
+                total_ok, total_fail = 0, 0
+                for i, retry_url in enumerate(self._retry_urls, 1):
+                    if self._cancel_event.is_set():
+                        break
+                    self.log_line.emit(f"[Retry {i}/{len(self._retry_urls)}] {retry_url}")
+                    try:
+                        ok, fail = download_job_batch(
+                            retry_url,
+                            self._video_folder,
+                            self._thumb_folder,
+                            download_video=self._download_video,
+                            download_thumb=self._download_thumb,
+                            quality=self._quality,
+                            thumb_locales=self._thumb_locales,
+                            on_progress=lambda c, t: self.progress.emit(c + (i-1) * t, len(self._retry_urls) * t),
+                            on_log=self.log_line.emit,
+                            cancelled=self._cancel_event.is_set,
+                            anti_ban_config=self._anti_ban_config,
+                            max_workers=self._max_workers,
+                        )
+                        total_ok += ok
+                        total_fail += fail
+                    except Exception as e:
+                        self.log_line.emit(f"[Lỗi] {retry_url}: {e}")
+                        total_fail += 1
+                self.finished.emit(total_ok, total_fail)
+            else:
+                ok, fail = download_job_batch(
+                    self._url,
+                    self._video_folder,
+                    self._thumb_folder,
+                    download_video=self._download_video,
+                    download_thumb=self._download_thumb,
+                    quality=self._quality,
+                    thumb_locales=self._thumb_locales,
+                    on_progress=self.progress.emit,
+                    on_log=self.log_line.emit,
+                    cancelled=self._cancel_event.is_set,
+                    anti_ban_config=self._anti_ban_config,
+                    max_workers=self._max_workers,
+                )
+                self.finished.emit(ok, fail)
         except Exception as exc:
             self.failed.emit(str(exc))
 
@@ -82,34 +157,50 @@ class MainWindow(QWidget):
         self._thread: QThread | None = None
         self._worker: DownloadWorker | None = None
         self._cancel_event = threading.Event()
+        self._retry_urls: list[str] = []
 
         # Cài đặt UI
         setup_thumb_download_ui(self)
+
+        # Load settings
+        self._load_settings_from_file()
 
         # Kết nối tín hiệu
         self._video_folder_browse_btn.clicked.connect(self._pick_video_folder)
         self._folder_browse_btn.clicked.connect(self._pick_thumb_folder)
         self._start_btn.clicked.connect(self._start)
         self._cancel_btn.clicked.connect(self._cancel)
+        self._retry_btn.clicked.connect(self._retry_failed)
         self._btn_clear_idle.clicked.connect(self._clear_idle)
         self._cb_thumb.toggled.connect(lambda _c: self._sync_thumb_locale_widgets())
         self._sync_thumb_locale_widgets()
 
         # Cập nhật logic cho quality pills (chỉ chọn 1)
         for b in self._quality_buttons:
-            b.clicked.connect(lambda checked, btn=b: self._on_quality_selected(btn) if checked else None)
+            b.clicked.connect(lambda checked, btn=b: self._on_quality_selected(btn))
+
+        # Lưu settings khi thay đổi
+        self._cb_video.toggled.connect(lambda _: self._save_settings_to_file())
+        self._cb_thumb.toggled.connect(lambda _: self._save_settings_to_file())
+        self._cb_thumb_locale_en.toggled.connect(lambda _: self._save_settings_to_file())
+        self._cb_thumb_locale_ko.toggled.connect(lambda _: self._save_settings_to_file())
+        self._cb_thumb_locale_ja.toggled.connect(lambda _: self._save_settings_to_file())
+        self._custom_locale_edit.textChanged.connect(lambda _: self._save_settings_to_file())
+        self._thread_spin.valueChanged.connect(lambda _: self._save_settings_to_file())
 
     def _on_quality_selected(self, btn):
         for b in self._quality_buttons:
             if b != btn:
                 b.setChecked(False)
         btn.setChecked(True)
+        self._save_settings_to_file()
 
     def _sync_thumb_locale_widgets(self) -> None:
         thumb_on = self._cb_thumb.isChecked()
         self._thumb_locale_label.setEnabled(thumb_on)
         self._cb_thumb_locale_en.setEnabled(thumb_on)
         self._cb_thumb_locale_ko.setEnabled(thumb_on)
+        self._cb_thumb_locale_ja.setEnabled(thumb_on)
 
     def _get_selected_quality(self) -> str:
         for b in self._quality_buttons:
@@ -117,15 +208,51 @@ class MainWindow(QWidget):
                 return b.text()
         return "Tốt nhất"
 
+    def _load_settings_from_file(self) -> None:
+        s = _load_settings()
+        self._video_folder_edit.setText(s.get("video_folder", ""))
+        self._folder_edit.setText(s.get("thumb_folder", ""))
+        self._cb_video.setChecked(s.get("download_video", True))
+        self._cb_thumb.setChecked(s.get("download_thumb", True))
+        self._cb_thumb_locale_en.setChecked(s.get("thumb_locale_en", True))
+        self._cb_thumb_locale_ko.setChecked(s.get("thumb_locale_ko", True))
+        self._cb_thumb_locale_ja.setChecked(s.get("thumb_locale_ja", True))
+        self._custom_locale_edit.setText(s.get("custom_locale", ""))
+        self._thread_spin.setValue(s.get("concurrent_count", 2))
+        quality = s.get("quality", "720p")
+        for b in self._quality_buttons:
+            b.setChecked(b.text() == quality)
+
+    def _save_settings_to_file(self) -> None:
+        settings = {
+            "video_folder": self._video_folder_edit.text(),
+            "thumb_folder": self._folder_edit.text(),
+            "quality": self._get_selected_quality(),
+            "download_video": self._cb_video.isChecked(),
+            "download_thumb": self._cb_thumb.isChecked(),
+            "thumb_locale_en": self._cb_thumb_locale_en.isChecked(),
+            "thumb_locale_ko": self._cb_thumb_locale_ko.isChecked(),
+            "thumb_locale_ja": self._cb_thumb_locale_ja.isChecked(),
+            "custom_locale": self._custom_locale_edit.text().strip(),
+            "concurrent_count": self._thread_spin.value()
+        }
+        _save_settings(settings)
+
+    def closeEvent(self, event) -> None:
+        self._save_settings_to_file()
+        event.accept()
+
     def _pick_video_folder(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "Chọn thư mục lưu video")
         if path:
             self._video_folder_edit.setText(path)
+            self._save_settings_to_file()
 
     def _pick_thumb_folder(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "Chọn thư mục lưu thumbnail")
         if path:
             self._folder_edit.setText(path)
+            self._save_settings_to_file()
 
     def _append_log(self, text: str) -> None:
         self._log.appendPlainText(text)
@@ -143,6 +270,26 @@ class MainWindow(QWidget):
         self._log.clear()
         self._progress.setValue(0)
         self._queue_count_label.setText("0 / 0 mục")
+
+    def _retry_failed(self) -> None:
+        from anti_ban import FailedURLLogger
+        logger = FailedURLLogger()
+        failed = logger.load_failed_urls()
+        if not failed:
+            QMessageBox.information(self, "Không có mục thất bại", "Không tìm thấy URL nào bị thất bại.")
+            return
+        self._retry_urls = [item[0] for item in failed]
+        reply = QMessageBox.question(
+            self,
+            "Xác nhận tải lại",
+            f"Tìm thấy {len(self._retry_urls)} mục bị thất bại. Bạn có muốn tải lại không?",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if reply != QMessageBox.Yes:
+            return
+        self._url_edit.setText(self._retry_urls[0])
+        self._log.append(f"[Retry] Sẽ tải lại {len(self._retry_urls)} mục...")
+        self._start()
 
     def _start(self) -> None:
         url = self._url_edit.text().strip()
@@ -176,6 +323,14 @@ class MainWindow(QWidget):
                 thumb_locales.append("en")
             if self._cb_thumb_locale_ko.isChecked():
                 thumb_locales.append("ko")
+            if self._cb_thumb_locale_ja.isChecked():
+                thumb_locales.append("ja")
+            custom_input = self._custom_locale_edit.text().strip()
+            if custom_input:
+                for code in custom_input.split(","):
+                    code = code.strip().lower()
+                    if code and code not in thumb_locales:
+                        thumb_locales.append(code)
 
         self._cancel_event.clear()
         self._log.clear()
@@ -224,6 +379,7 @@ class MainWindow(QWidget):
             cancel_event=self._cancel_event,
             anti_ban_config=anti_ban_config,
             max_workers=max_workers,
+            retry_urls=self._retry_urls if self._retry_urls else None,
         )
         self._worker.moveToThread(self._thread)
 
@@ -248,6 +404,7 @@ class MainWindow(QWidget):
             self._thread.deleteLater()
             self._thread = None
         self._worker = None
+        self._retry_urls = []
         self._start_btn.setEnabled(True)
         self._cancel_btn.setEnabled(False)
 

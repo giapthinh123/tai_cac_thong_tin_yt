@@ -24,7 +24,7 @@ class AntiBanManager:
         self,
         min_delay: float = 5.5,
         max_delay: float = 15.0,
-        rate_limit: int = 5_000_000,
+        rate_limit: int = 10_000_000,
         proxy_list: list[str] | None = None,
         vpn_enabled: bool = False,
         vpn_change_interval: int = 30,

@@ -206,6 +206,12 @@ QPushButton#QualityPill:disabled {
     border-color: #e5e7eb;
 }
 
+QPushButton#QualityPill:checked {
+    background-color: #2563eb;
+    color: #ffffff;
+    border-color: #2563eb;
+}
+
 QLabel#QueueHint {
     color: #9ca3af;
     font-size: 13px;

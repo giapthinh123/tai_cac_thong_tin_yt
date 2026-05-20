@@ -21,12 +21,14 @@ from anti_ban import AntiBanManager, ExponentialBackoff, FailedURLLogger
 YDL_OPTS: dict[str, Any] = {
     "quiet": True,
     "extract_flat": True,
+    "cookiesfrombrowser": ("chrome", ),
 }
 
 # Tiêu đề thumbnail theo vùng: map mã thư mục → giá trị Accept-Language (ISO giống trình duyệt).
 THUMB_LOCALE_ACCEPT_LANGUAGE: dict[str, str] = {
     "en": "en-US,en;q=0.9",
     "ko": "ko-KR,ko;q=0.9",
+    "ja": "ja-JP,ja;q=0.9",
 }
 
 
@@ -140,19 +142,22 @@ def summarize_url_videos(url: str) -> tuple[int, str]:
     return len(videos), label
 
 
-def fetch_thumbnail_jpeg_bytes(video_id: str) -> bytes | None:
-    """Tải bytes JPEG thumbnail (maxres fallback hq)."""
+def fetch_thumbnail_jpeg_bytes(video_id: str, max_retries: int = 5) -> bytes | None:
+    """Tải bytes JPEG thumbnail (maxres fallback hq) với tự động thử lại."""
     thumb_urls = [
         f"https://img.youtube.com/vi/{video_id}/maxresdefault.jpg",
         f"https://img.youtube.com/vi/{video_id}/hqdefault.jpg",
     ]
-    for thumb_url in thumb_urls:
-        try:
-            r = requests.get(thumb_url, timeout=10)
-            if r.status_code == 200 and r.content:
-                return r.content
-        except requests.RequestException:
-            continue
+    for attempt in range(max_retries):
+        for thumb_url in thumb_urls:
+            try:
+                r = requests.get(thumb_url, timeout=10)
+                if r.status_code == 200 and r.content:
+                    return r.content
+            except requests.RequestException:
+                continue
+        if attempt < max_retries - 1:
+            time.sleep(1 * (attempt + 1))
     return None
 
 
@@ -182,7 +187,7 @@ def fetch_video_title_for_locale(
         return fallback_title
     accept = THUMB_LOCALE_ACCEPT_LANGUAGE.get(locale_code)
     if not accept:
-        return fallback_title
+        accept = f"{locale_code}-{locale_code.upper()},{locale_code};q=0.9"
     url = f"https://www.youtube.com/watch?v={video_id}"
     ydl_opts: dict[str, Any] = {
         "quiet": True,
@@ -190,6 +195,7 @@ def fetch_video_title_for_locale(
         "extract_flat": False,
         "noplaylist": True,
         "http_headers": {"Accept-Language": accept},
+        "cookiesfrombrowser": ("chrome", ),
     }
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -210,9 +216,10 @@ def download_thumbnail_file(
     title: str,
     index: int,
     output_folder: str,
+    max_retries: int = 5,
 ) -> bool:
     """Tải một thumbnail; tên file {index:03d} - {title}.jpg. Trả về True nếu thành công."""
-    data = fetch_thumbnail_jpeg_bytes(video_id)
+    data = fetch_thumbnail_jpeg_bytes(video_id, max_retries=max_retries)
     if not data:
         return False
     return save_thumbnail_jpeg(output_folder, index, title, data)
@@ -226,13 +233,14 @@ def download_thumbnail_multi_locale(
     locales: list[str],
     *,
     cancelled: Callable[[], bool] | None = None,
+    max_retries: int = 5,
 ) -> bool:
     """
     Tải thumbnail một lần, ghi vào base_folder/<locale>/ với tiêu đề theo từng ngôn ngữ.
     locales đã được normalize (vd. en, ko).
     """
     is_cancelled = cancelled or (lambda: False)
-    data = fetch_thumbnail_jpeg_bytes(video_id)
+    data = fetch_thumbnail_jpeg_bytes(video_id, max_retries=max_retries)
     if not data:
         return False
     clean_fallback = clean_filename(fallback_title)
@@ -256,6 +264,7 @@ def download_thumbnails_batch(
     output_folder: str,
     *,
     thumb_locales: list[str] | None = None,
+    thumb_max_retries: int = 5,
     on_progress: Callable[[int, int], None] | None = None,
     on_log: Callable[[str], None] | None = None,
     cancelled: Callable[[], bool] | None = None,
@@ -268,6 +277,7 @@ def download_thumbnails_batch(
 
     thumb_locales: ví dụ ``[\"en\", \"ko\"]`` → ảnh lưu vào ``.../<kênh>/en/``, ``.../ko/``
     với tên file theo tiêu đề tương ứng. Rỗng / None → một thư mục như trước.
+    thumb_max_retries: số lần thử lại khi tải thumbnail thất bại (mặc định 5).
     """
     is_cancelled = cancelled or (lambda: False)
     log = on_log or (lambda _m: None)
@@ -294,14 +304,14 @@ def download_thumbnails_batch(
         prog(i, total)
         if locales:
             if download_thumbnail_multi_locale(
-                video_id, title, i, target_folder, locales, cancelled=is_cancelled
+                video_id, title, i, target_folder, locales, cancelled=is_cancelled, max_retries=thumb_max_retries
             ):
                 ok += 1
                 log(f"[{i}] Downloaded ({', '.join(locales)}): {title}")
             else:
                 fail += 1
                 log(f"[{i}] Failed: {title}")
-        elif download_thumbnail_file(video_id, title, i, target_folder):
+        elif download_thumbnail_file(video_id, title, i, target_folder, max_retries=thumb_max_retries):
             ok += 1
             log(f"[{i}] Downloaded: {title}")
         else:
@@ -414,6 +424,7 @@ def download_single_video(
                 "postprocessor_args": {
                     "Merger+ffmpeg_o": ["-movflags", "+faststart"],
                 },
+                "cookiesfrombrowser": ("chrome", ),
             }
             ffmpeg_bin = shutil.which("ffmpeg")
             if ffmpeg_bin:
@@ -460,6 +471,50 @@ def download_single_video(
             return False
 
 
+def download_thumbnail_from_api(
+    video_data: dict,
+    index: int,
+    base_folder: str,
+    locales: list[str],
+    *,
+    cancelled: Callable[[], bool] | None = None,
+    max_retries: int = 5,
+) -> bool:
+    is_cancelled = cancelled or (lambda: False)
+    thumbnail_url = video_data.get('thumbnail_url')
+    if not thumbnail_url:
+        return False
+        
+    data = None
+    for attempt in range(max_retries):
+        try:
+            r = requests.get(thumbnail_url, timeout=10)
+            if r.status_code == 200 and r.content:
+                data = r.content
+                break
+        except requests.RequestException:
+            pass
+        if attempt < max_retries - 1:
+            time.sleep(1 * (attempt + 1))
+            
+    if not data:
+        return False
+        
+    default_title = video_data['default_title']
+    
+    if not locales:
+        return save_thumbnail_jpeg(base_folder, index, default_title, data)
+        
+    for loc in locales:
+        if is_cancelled():
+            return False
+        title_loc = video_data['localized_titles'].get(loc, default_title)
+        locale_folder = os.path.join(base_folder, loc)
+        if not save_thumbnail_jpeg(locale_folder, index, title_loc, data):
+            return False
+    return True
+
+
 def download_job_batch(
     url: str,
     video_folder: str,
@@ -469,6 +524,7 @@ def download_job_batch(
     download_thumb: bool,
     quality: str,
     thumb_locales: list[str] | None = None,
+    thumb_max_retries: int = 5,
     on_progress: Callable[[int, int], None] | None = None,
     on_log: Callable[[str], None] | None = None,
     cancelled: Callable[[], bool] | None = None,
@@ -497,9 +553,22 @@ def download_job_batch(
     if download_video and shutil.which("ffmpeg") is None:
         raise ValueError("Không tìm thấy ffmpeg. Vui lòng cài đặt ffmpeg và thêm vào PATH để có thể ghép audio và video.")
 
-    info, videos = extract_videos_from_url(url)
-    sub = _folder_name_from_info(info)
     thumb_locale_codes = normalize_thumb_locales(thumb_locales)
+    
+    api_video_dict = None
+    try:
+        import youtube_api_utils
+        log("[Google API] Bắt đầu lấy danh sách video bằng API...")
+        api_videos, sub = youtube_api_utils.fetch_videos_from_api(url, thumb_locale_codes)
+        videos = []
+        api_video_dict = {}
+        for v in api_videos:
+            videos.append((v['id'], v['default_title']))
+            api_video_dict[v['id']] = v
+    except Exception as e:
+        log(f"[Google API] Lỗi: {e}. Đang dùng yt-dlp dự phòng...")
+        info, videos = extract_videos_from_url(url)
+        sub = _folder_name_from_info(info)
 
     v_target = video_folder if video_folder else ""
     t_target = thumb_folder if thumb_folder else ""
@@ -546,17 +615,29 @@ def download_job_batch(
 
         if download_thumb and t_target and not is_cancelled():
             log(f"[{i}] Đang tải thumbnail: {title}...")
-            if thumb_locale_codes:
-                t_success = download_thumbnail_multi_locale(
-                    video_id,
-                    title,
+            if api_video_dict and video_id in api_video_dict:
+                t_success = download_thumbnail_from_api(
+                    api_video_dict[video_id],
                     i,
                     t_target,
                     thumb_locale_codes,
                     cancelled=is_cancelled,
+                    max_retries=thumb_max_retries,
                 )
             else:
-                t_success = download_thumbnail_file(video_id, title, i, t_target)
+                if thumb_locale_codes:
+                    t_success = download_thumbnail_multi_locale(
+                        video_id,
+                        title,
+                        i,
+                        t_target,
+                        thumb_locale_codes,
+                        cancelled=is_cancelled,
+                        max_retries=thumb_max_retries,
+                    )
+                else:
+                    t_success = download_thumbnail_file(video_id, title, i, t_target, max_retries=thumb_max_retries)
+                    
             if not t_success:
                 item_ok = False
                 log(f"[{i}] Tải thumbnail thất bại: {title}")

@@ -141,7 +141,7 @@ def setup_thumb_download_ui(win: QWidget) -> None:
         b = QPushButton(t)
         b.setObjectName("QualityPill")
         b.setCheckable(True)
-        if t == "Tốt nhất":
+        if t == "720p":
             b.setChecked(True)
         qual_row.addWidget(b)
         quality_buttons.append(b)
@@ -163,11 +163,22 @@ def setup_thumb_download_ui(win: QWidget) -> None:
     thumb_loc_lab.setStyleSheet("color:#374151;font-size:13px;")
     cb_thumb_locale_en = QCheckBox("Tiếng Anh (en)")
     cb_thumb_locale_ko = QCheckBox("Tiếng Hàn (ko)")
+    cb_thumb_locale_ja = QCheckBox("Tiếng Nhật (ja)")
     cb_thumb_locale_en.setChecked(True)
     cb_thumb_locale_ko.setChecked(True)
+    cb_thumb_locale_ja.setChecked(True)
     thumb_loc_row.addWidget(thumb_loc_lab, alignment=Qt.AlignVCenter)
     thumb_loc_row.addWidget(cb_thumb_locale_en, alignment=Qt.AlignVCenter)
     thumb_loc_row.addWidget(cb_thumb_locale_ko, alignment=Qt.AlignVCenter)
+    thumb_loc_row.addWidget(cb_thumb_locale_ja, alignment=Qt.AlignVCenter)
+    custom_locale_lab = QLabel("Tùy chỉnh:")
+    custom_locale_lab.setStyleSheet("color:#6b7280;font-size:12px;")
+    custom_locale_edit = QLineEdit()
+    custom_locale_edit.setPlaceholderText("vd: zh, fr, de")
+    custom_locale_edit.setFixedWidth(80)
+    custom_locale_edit.setStyleSheet("padding:4px;border:1px solid #d1d5db;border-radius:4px;")
+    thumb_loc_row.addWidget(custom_locale_lab, alignment=Qt.AlignVCenter)
+    thumb_loc_row.addWidget(custom_locale_edit, alignment=Qt.AlignVCenter)
     thumb_loc_row.addStretch(1)
 
     conc_row = QHBoxLayout()
@@ -258,6 +269,10 @@ def setup_thumb_download_ui(win: QWidget) -> None:
     foot.addWidget(btn_clear)
     foot.addWidget(start_btn, stretch=1)
     foot.addWidget(cancel_btn, stretch=1)
+    retry_btn = QPushButton("Tải lại")
+    retry_btn.setObjectName("GhostToolbar")
+    retry_btn.setToolTip("Tải lại các mục bị thất bại từ file failed_urls.txt")
+    foot.addWidget(retry_btn)
 
     root = QVBoxLayout(win)
     root.setContentsMargins(18, 16, 18, 18)
@@ -275,6 +290,7 @@ def setup_thumb_download_ui(win: QWidget) -> None:
     win._folder_browse_btn = btn_pick_thumb
     win._start_btn = start_btn
     win._cancel_btn = cancel_btn
+    win._retry_btn = retry_btn
     win._progress = progress
     win._log = log
 
@@ -299,4 +315,6 @@ def setup_thumb_download_ui(win: QWidget) -> None:
     win._thumb_locale_label = thumb_loc_lab
     win._cb_thumb_locale_en = cb_thumb_locale_en
     win._cb_thumb_locale_ko = cb_thumb_locale_ko
+    win._cb_thumb_locale_ja = cb_thumb_locale_ja
+    win._custom_locale_edit = custom_locale_edit
     win._thread_spin = spin
