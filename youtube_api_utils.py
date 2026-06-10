@@ -9,27 +9,31 @@ def get_youtube_client():
     return build('youtube', 'v3', developerKey=API_KEY)
 
 def extract_channel_id(youtube, url: str) -> str:
-    # Pattern for standard channel URL
+    # /channel/UC... → ID trực tiếp, OK
     match = re.search(r"/channel/([\w-]+)", url)
-    if match: return match.group(1)
-    
-    # Pattern for custom/user/@handle URL
-    match = re.search(r"/c/([^/]+)", url)
     if match:
-        res = youtube.channels().list(part='id', forUsername=match.group(1)).execute()
-        if res.get('items'): return res['items'][0]['id']
-        
+        return match.group(1)
+
+    # /user/username → dùng forUsername (legacy, vẫn đúng với dạng này)
     match = re.search(r"/user/([^/]+)", url)
     if match:
         res = youtube.channels().list(part='id', forUsername=match.group(1)).execute()
-        if res.get('items'): return res['items'][0]['id']
-        
-    match = re.search(r"/@([^/]+)", url)
+        if res.get('items'):
+            return res['items'][0]['id']
+
+    # /@handle hoặc /c/handle → dùng forHandle (API v3 hỗ trợ từ 2023)
+    match = re.search(r"/@([^/?]+)", url) or re.search(r"/c/([^/?]+)", url)
     if match:
-        res = youtube.search().list(part='snippet', type='channel', q=match.group(1)).execute()
-        if res.get('items'): return res['items'][0]['snippet']['channelId']
-        
-    raise ValueError("Invalid YouTube channel URL or could not resolve channel ID.")
+        handle = match.group(1)
+        # Đảm bảo có prefix @
+        if not handle.startswith('@'):
+            handle = '@' + handle
+        res = youtube.channels().list(part='id', forHandle=handle).execute()
+        if res.get('items'):
+            return res['items'][0]['id']
+        raise ValueError(f"Không tìm thấy kênh với handle: {handle}")
+
+    raise ValueError("URL kênh YouTube không hợp lệ hoặc không thể resolve channel ID.")
 
 def parse_url_type(url: str) -> tuple[str, str]:
     """Returns type ('video', 'playlist', 'channel') and the relevant ID/URL."""

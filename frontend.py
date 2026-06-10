@@ -112,9 +112,15 @@ def setup_thumb_download_ui(win: QWidget) -> None:
     video_folder = QLineEdit(r"D:\downloads\videos")
     thumb_folder = QLineEdit()
     thumb_folder.setPlaceholderText("Chọn thư mục lưu thumbnail")
+    sub_folder = QLineEdit()
+    sub_folder.setPlaceholderText("Chọn thư mục lưu phụ đề")
+    audio_folder = QLineEdit()
+    audio_folder.setPlaceholderText("Chọn thư mục lưu audio (MP3)")
 
     btn_pick_video = QPushButton("Chọn")
     btn_pick_thumb = QPushButton("Chọn")
+    btn_pick_sub = QPushButton("Chọn")
+    btn_pick_audio = QPushButton("Chọn")
 
     def folder_row(label: str, edit: QLineEdit, btn: QPushButton) -> QHBoxLayout:
         row = QHBoxLayout()
@@ -130,6 +136,8 @@ def setup_thumb_download_ui(win: QWidget) -> None:
     set_outer.addWidget(sec_set)
     set_outer.addLayout(folder_row("Thư mục video", video_folder, btn_pick_video))
     set_outer.addLayout(folder_row("Thư mục thumb", thumb_folder, btn_pick_thumb))
+    set_outer.addLayout(folder_row("Thư mục sub", sub_folder, btn_pick_sub))
+    set_outer.addLayout(folder_row("Thư mục audio", audio_folder, btn_pick_audio))
 
     qual_row = QHBoxLayout()
     qual_row.setSpacing(8)
@@ -153,11 +161,17 @@ def setup_thumb_download_ui(win: QWidget) -> None:
     cb_video.setChecked(True)
     cb_thumb = QCheckBox("Thumbnail")
     cb_thumb.setChecked(True)
+    cb_audio = QCheckBox("Audio (Mp3)")
+    cb_audio.setChecked(False)
+    cb_sub = QCheckBox("Phụ đề")
+    cb_sub.setChecked(False)
     cb_cookie = QCheckBox("Sử dụng Cookie Chrome")
     cb_cookie.setChecked(False)
     cb_cookie.setToolTip("Sử dụng Cookie từ Chrome để tải video giới hạn độ tuổi hoặc video riêng tư.")
     chk_row.addWidget(cb_video)
     chk_row.addWidget(cb_thumb)
+    chk_row.addWidget(cb_audio)
+    chk_row.addWidget(cb_sub)
     chk_row.addWidget(cb_cookie)
     chk_row.addStretch(1)
 
@@ -185,6 +199,27 @@ def setup_thumb_download_ui(win: QWidget) -> None:
     thumb_loc_row.addWidget(custom_locale_edit, alignment=Qt.AlignVCenter)
     thumb_loc_row.addStretch(1)
 
+    sub_loc_row = QHBoxLayout()
+    sub_loc_row.setSpacing(14)
+    sub_loc_lab = QLabel("Sub — ngôn ngữ phụ đề:")
+    sub_loc_lab.setStyleSheet("color:#374151;font-size:13px;")
+    cb_sub_locale_vi = QCheckBox("Tiếng Việt (vi)")
+    cb_sub_locale_en = QCheckBox("Tiếng Anh (en)")
+    cb_sub_locale_vi.setChecked(True)
+    cb_sub_locale_en.setChecked(True)
+    sub_loc_row.addWidget(sub_loc_lab, alignment=Qt.AlignVCenter)
+    sub_loc_row.addWidget(cb_sub_locale_vi, alignment=Qt.AlignVCenter)
+    sub_loc_row.addWidget(cb_sub_locale_en, alignment=Qt.AlignVCenter)
+    custom_sub_locale_lab = QLabel("Tùy chỉnh:")
+    custom_sub_locale_lab.setStyleSheet("color:#6b7280;font-size:12px;")
+    custom_sub_locale_edit = QLineEdit()
+    custom_sub_locale_edit.setPlaceholderText("vd: ja, ko, zh")
+    custom_sub_locale_edit.setFixedWidth(80)
+    custom_sub_locale_edit.setStyleSheet("padding:4px;border:1px solid #d1d5db;border-radius:4px;")
+    sub_loc_row.addWidget(custom_sub_locale_lab, alignment=Qt.AlignVCenter)
+    sub_loc_row.addWidget(custom_sub_locale_edit, alignment=Qt.AlignVCenter)
+    sub_loc_row.addStretch(1)
+
     conc_row = QHBoxLayout()
     conc_row.setSpacing(8)
     conc_lab = QLabel("Tải đồng thời tối đa")
@@ -202,6 +237,7 @@ def setup_thumb_download_ui(win: QWidget) -> None:
     set_outer.addLayout(qual_row)
     set_outer.addLayout(chk_row)
     set_outer.addLayout(thumb_loc_row)
+    set_outer.addLayout(sub_loc_row)
     set_outer.addLayout(conc_row)
 
     # —— HÀNG ĐỢI ——
@@ -316,10 +352,20 @@ def setup_thumb_download_ui(win: QWidget) -> None:
     win._quality_buttons = quality_buttons
     win._cb_video = cb_video
     win._cb_thumb = cb_thumb
+    win._cb_audio = cb_audio
+    win._cb_sub = cb_sub
     win._cb_cookie = cb_cookie
     win._thumb_locale_label = thumb_loc_lab
     win._cb_thumb_locale_en = cb_thumb_locale_en
     win._cb_thumb_locale_ko = cb_thumb_locale_ko
     win._cb_thumb_locale_ja = cb_thumb_locale_ja
     win._custom_locale_edit = custom_locale_edit
+    win._sub_locale_label = sub_loc_lab
+    win._cb_sub_locale_vi = cb_sub_locale_vi
+    win._cb_sub_locale_en = cb_sub_locale_en
+    win._custom_sub_locale_edit = custom_sub_locale_edit
+    win._sub_folder_edit = sub_folder
+    win._sub_folder_browse_btn = btn_pick_sub
+    win._audio_folder_edit = audio_folder
+    win._audio_folder_browse_btn = btn_pick_audio
     win._thread_spin = spin

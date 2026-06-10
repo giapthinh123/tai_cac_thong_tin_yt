@@ -44,13 +44,20 @@ def _load_settings() -> dict:
     return {
         "video_folder": "",
         "thumb_folder": "",
+        "sub_folder": "",
+        "audio_folder": "",
         "quality": "720p",
         "download_video": True,
         "download_thumb": True,
+        "download_sub": False,
+        "download_audio": False,
         "thumb_locale_en": True,
         "thumb_locale_ko": True,
         "thumb_locale_ja": True,
         "custom_locale": "",
+        "sub_locale_vi": True,
+        "sub_locale_en": True,
+        "custom_sub_locale": "",
         "concurrent_count": 2,
         "use_chrome_cookie": False
     }
@@ -87,6 +94,11 @@ class DownloadWorker(QObject):
         max_workers: int = 1,
         retry_urls: list[str] | None = None,
         use_chrome_cookie: bool = False,
+        download_sub: bool = False,
+        sub_locales: list[str] | None = None,
+        sub_folder: str | None = None,
+        download_audio: bool = False,
+        audio_folder: str | None = None,
     ) -> None:
         super().__init__()
         self._url = url
@@ -101,6 +113,11 @@ class DownloadWorker(QObject):
         self._anti_ban_config = anti_ban_config
         self._max_workers = max_workers
         self._use_chrome_cookie = use_chrome_cookie
+        self._download_sub = download_sub
+        self._sub_locales = sub_locales
+        self._sub_folder = sub_folder
+        self._download_audio = download_audio
+        self._audio_folder = audio_folder
 
     def run(self) -> None:
         try:
@@ -118,6 +135,9 @@ class DownloadWorker(QObject):
                             download_video=self._download_video,
                             download_thumb=self._download_thumb,
                             quality=self._quality,
+                            download_sub=self._download_sub,
+                            sub_folder=self._sub_folder,
+                            sub_locales=self._sub_locales,
                             thumb_locales=self._thumb_locales,
                             on_progress=lambda c, t: self.progress.emit(c + (i-1) * t, len(self._retry_urls) * t),
                             on_log=self.log_line.emit,
@@ -125,6 +145,8 @@ class DownloadWorker(QObject):
                             anti_ban_config=self._anti_ban_config,
                             max_workers=self._max_workers,
                             use_chrome_cookie=self._use_chrome_cookie,
+                            download_audio=self._download_audio,
+                            audio_folder=self._audio_folder,
                         )
                         total_ok += ok
                         total_fail += fail
@@ -140,6 +162,9 @@ class DownloadWorker(QObject):
                     download_video=self._download_video,
                     download_thumb=self._download_thumb,
                     quality=self._quality,
+                    download_sub=self._download_sub,
+                    sub_folder=self._sub_folder,
+                    sub_locales=self._sub_locales,
                     thumb_locales=self._thumb_locales,
                     on_progress=self.progress.emit,
                     on_log=self.log_line.emit,
@@ -147,6 +172,8 @@ class DownloadWorker(QObject):
                     anti_ban_config=self._anti_ban_config,
                     max_workers=self._max_workers,
                     use_chrome_cookie=self._use_chrome_cookie,
+                    download_audio=self._download_audio,
+                    audio_folder=self._audio_folder,
                 )
                 self.finished.emit(ok, fail)
         except Exception as exc:
@@ -173,12 +200,16 @@ class MainWindow(QWidget):
         # Kết nối tín hiệu
         self._video_folder_browse_btn.clicked.connect(self._pick_video_folder)
         self._folder_browse_btn.clicked.connect(self._pick_thumb_folder)
+        self._sub_folder_browse_btn.clicked.connect(self._pick_sub_folder)
+        self._audio_folder_browse_btn.clicked.connect(self._pick_audio_folder)
         self._start_btn.clicked.connect(self._start)
         self._cancel_btn.clicked.connect(self._cancel)
         self._retry_btn.clicked.connect(self._retry_failed)
         self._btn_clear_idle.clicked.connect(self._clear_idle)
         self._cb_thumb.toggled.connect(lambda _c: self._sync_thumb_locale_widgets())
+        self._cb_sub.toggled.connect(lambda _c: self._sync_sub_locale_widgets())
         self._sync_thumb_locale_widgets()
+        self._sync_sub_locale_widgets()
 
         # Cập nhật logic cho quality pills (chỉ chọn 1)
         for b in self._quality_buttons:
@@ -187,11 +218,18 @@ class MainWindow(QWidget):
         # Lưu settings khi thay đổi
         self._cb_video.toggled.connect(lambda _: self._save_settings_to_file())
         self._cb_thumb.toggled.connect(lambda _: self._save_settings_to_file())
+        self._cb_audio.toggled.connect(lambda _: self._save_settings_to_file())
+        self._cb_sub.toggled.connect(lambda _: self._save_settings_to_file())
         self._cb_cookie.toggled.connect(lambda _: self._save_settings_to_file())
         self._cb_thumb_locale_en.toggled.connect(lambda _: self._save_settings_to_file())
         self._cb_thumb_locale_ko.toggled.connect(lambda _: self._save_settings_to_file())
         self._cb_thumb_locale_ja.toggled.connect(lambda _: self._save_settings_to_file())
         self._custom_locale_edit.textChanged.connect(lambda _: self._save_settings_to_file())
+        self._cb_sub_locale_vi.toggled.connect(lambda _: self._save_settings_to_file())
+        self._cb_sub_locale_en.toggled.connect(lambda _: self._save_settings_to_file())
+        self._custom_sub_locale_edit.textChanged.connect(lambda _: self._save_settings_to_file())
+        self._sub_folder_edit.textChanged.connect(lambda _: self._save_settings_to_file())
+        self._audio_folder_edit.textChanged.connect(lambda _: self._save_settings_to_file())
         self._thread_spin.valueChanged.connect(lambda _: self._save_settings_to_file())
 
     def _on_quality_selected(self, btn):
@@ -208,6 +246,13 @@ class MainWindow(QWidget):
         self._cb_thumb_locale_ko.setEnabled(thumb_on)
         self._cb_thumb_locale_ja.setEnabled(thumb_on)
 
+    def _sync_sub_locale_widgets(self) -> None:
+        sub_on = self._cb_sub.isChecked()
+        self._sub_locale_label.setEnabled(sub_on)
+        self._cb_sub_locale_vi.setEnabled(sub_on)
+        self._cb_sub_locale_en.setEnabled(sub_on)
+        self._custom_sub_locale_edit.setEnabled(sub_on)
+
     def _get_selected_quality(self) -> str:
         for b in self._quality_buttons:
             if b.isChecked():
@@ -218,13 +263,20 @@ class MainWindow(QWidget):
         s = _load_settings()
         self._video_folder_edit.setText(s.get("video_folder", ""))
         self._folder_edit.setText(s.get("thumb_folder", ""))
+        self._sub_folder_edit.setText(s.get("sub_folder", ""))
+        self._audio_folder_edit.setText(s.get("audio_folder", ""))
         self._cb_video.setChecked(s.get("download_video", True))
         self._cb_thumb.setChecked(s.get("download_thumb", True))
+        self._cb_audio.setChecked(s.get("download_audio", False))
+        self._cb_sub.setChecked(s.get("download_sub", False))
         self._cb_cookie.setChecked(s.get("use_chrome_cookie", False))
         self._cb_thumb_locale_en.setChecked(s.get("thumb_locale_en", True))
         self._cb_thumb_locale_ko.setChecked(s.get("thumb_locale_ko", True))
         self._cb_thumb_locale_ja.setChecked(s.get("thumb_locale_ja", True))
         self._custom_locale_edit.setText(s.get("custom_locale", ""))
+        self._cb_sub_locale_vi.setChecked(s.get("sub_locale_vi", True))
+        self._cb_sub_locale_en.setChecked(s.get("sub_locale_en", True))
+        self._custom_sub_locale_edit.setText(s.get("custom_sub_locale", ""))
         self._thread_spin.setValue(s.get("concurrent_count", 2))
         quality = s.get("quality", "720p")
         for b in self._quality_buttons:
@@ -234,14 +286,21 @@ class MainWindow(QWidget):
         settings = {
             "video_folder": self._video_folder_edit.text(),
             "thumb_folder": self._folder_edit.text(),
+            "sub_folder": self._sub_folder_edit.text(),
+            "audio_folder": self._audio_folder_edit.text(),
             "quality": self._get_selected_quality(),
             "download_video": self._cb_video.isChecked(),
             "download_thumb": self._cb_thumb.isChecked(),
+            "download_audio": self._cb_audio.isChecked(),
+            "download_sub": self._cb_sub.isChecked(),
             "use_chrome_cookie": self._cb_cookie.isChecked(),
             "thumb_locale_en": self._cb_thumb_locale_en.isChecked(),
             "thumb_locale_ko": self._cb_thumb_locale_ko.isChecked(),
             "thumb_locale_ja": self._cb_thumb_locale_ja.isChecked(),
             "custom_locale": self._custom_locale_edit.text().strip(),
+            "sub_locale_vi": self._cb_sub_locale_vi.isChecked(),
+            "sub_locale_en": self._cb_sub_locale_en.isChecked(),
+            "custom_sub_locale": self._custom_sub_locale_edit.text().strip(),
             "concurrent_count": self._thread_spin.value()
         }
         _save_settings(settings)
@@ -260,6 +319,18 @@ class MainWindow(QWidget):
         path = QFileDialog.getExistingDirectory(self, "Chọn thư mục lưu thumbnail")
         if path:
             self._folder_edit.setText(path)
+            self._save_settings_to_file()
+
+    def _pick_sub_folder(self) -> None:
+        path = QFileDialog.getExistingDirectory(self, "Chọn thư mục lưu phụ đề")
+        if path:
+            self._sub_folder_edit.setText(path)
+            self._save_settings_to_file()
+
+    def _pick_audio_folder(self) -> None:
+        path = QFileDialog.getExistingDirectory(self, "Chọn thư mục lưu audio")
+        if path:
+            self._audio_folder_edit.setText(path)
             self._save_settings_to_file()
 
     def _append_log(self, text: str) -> None:
@@ -303,16 +374,20 @@ class MainWindow(QWidget):
         url = self._url_edit.text().strip()
         v_folder = self._video_folder_edit.text().strip()
         t_folder = self._folder_edit.text().strip()
+        s_folder = self._sub_folder_edit.text().strip()
+        a_folder = self._audio_folder_edit.text().strip()
         
         dl_video = self._cb_video.isChecked()
         dl_thumb = self._cb_thumb.isChecked()
+        dl_sub = self._cb_sub.isChecked()
+        dl_audio = self._cb_audio.isChecked()
 
         if not url:
             QMessageBox.warning(self, "Thiếu URL", "Vui lòng nhập URL YouTube.")
             return
 
-        if not dl_video and not dl_thumb:
-            QMessageBox.warning(self, "Chưa chọn loại tải", "Vui lòng chọn tải Video hoặc Thumbnail.")
+        if not dl_video and not dl_thumb and not dl_sub and not dl_audio:
+            QMessageBox.warning(self, "Chưa chọn loại tải", "Vui lòng chọn tải Video, Thumbnail, Audio hoặc Phụ đề.")
             return
 
         if dl_video and not v_folder:
@@ -321,6 +396,14 @@ class MainWindow(QWidget):
 
         if dl_thumb and not t_folder:
             QMessageBox.warning(self, "Thiếu thư mục", "Vui lòng chọn thư mục lưu thumbnail.")
+            return
+
+        if dl_sub and not s_folder and not v_folder:
+            QMessageBox.warning(self, "Thiếu thư mục", "Vui lòng chọn thư mục lưu phụ đề.")
+            return
+
+        if dl_audio and not a_folder and not v_folder:
+            QMessageBox.warning(self, "Thiếu thư mục", "Vui lòng chọn thư mục lưu audio.")
             return
 
         quality = self._get_selected_quality()
@@ -339,6 +422,21 @@ class MainWindow(QWidget):
                     code = code.strip().lower()
                     if code and code not in thumb_locales:
                         thumb_locales.append(code)
+
+        sub_locales: list[str] = []
+        if dl_sub:
+            if self._cb_sub_locale_vi.isChecked():
+                sub_locales.append("vi")
+            if self._cb_sub_locale_en.isChecked():
+                sub_locales.append("en")
+            custom_sub_input = self._custom_sub_locale_edit.text().strip()
+            if custom_sub_input:
+                for code in custom_sub_input.split(","):
+                    code = code.strip().lower()
+                    if code and code not in sub_locales:
+                        sub_locales.append(code)
+            if not sub_locales:
+                sub_locales = ["all"]
 
         self._cancel_event.clear()
         self._log.clear()
@@ -389,6 +487,11 @@ class MainWindow(QWidget):
             max_workers=max_workers,
             retry_urls=self._retry_urls if self._retry_urls else None,
             use_chrome_cookie=self._cb_cookie.isChecked(),
+            download_sub=dl_sub,
+            sub_locales=sub_locales,
+            sub_folder=s_folder,
+            download_audio=dl_audio,
+            audio_folder=a_folder,
         )
         self._worker.moveToThread(self._thread)
 

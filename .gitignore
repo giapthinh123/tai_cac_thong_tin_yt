@@ -12,3 +12,10 @@ __pycache__/
 .venv
 
 test_thum/
+
+build/
+dist/
+*.spec
+
+failed_urls.txt
+settings.json

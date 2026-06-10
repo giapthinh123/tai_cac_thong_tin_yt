@@ -21,6 +21,11 @@ from anti_ban import AntiBanManager, ExponentialBackoff, FailedURLLogger
 YDL_OPTS: dict[str, Any] = {
     "quiet": True,
     "extract_flat": True,
+    "extractor_args": {
+        "youtube": {
+            "player_client": ["tv_embedded", "android_vr"]
+        }
+    }
 }
 
 # Tiêu đề thumbnail theo vùng: map mã thư mục → giá trị Accept-Language (ISO giống trình duyệt).
@@ -244,6 +249,11 @@ def fetch_video_title_for_locale(
         "extract_flat": False,
         "noplaylist": True,
         "http_headers": {"Accept-Language": accept},
+        "extractor_args": {
+            "youtube": {
+                "player_client": ["android", "ios"]
+            }
+        }
     }
     if use_chrome_cookie:
         ydl_opts["cookiesfrombrowser"] = ("chrome", )
@@ -455,6 +465,38 @@ def cleanup_video_artifacts(output_folder: str, index: int, title: str) -> None:
         pass
 
 
+def move_subtitle_files(video_folder: str, sub_folder: str, index: int, title: str) -> None:
+    if not sub_folder or video_folder == sub_folder:
+        return
+    prefix = f"{index:03d} - {clean_filename(title)}"
+    os.makedirs(sub_folder, exist_ok=True)
+    try:
+        for name in os.listdir(video_folder):
+            if name.startswith(prefix) and (name.endswith(".vtt") or name.endswith(".srt") or name.endswith(".ass") or name.endswith(".sbv")):
+                src = os.path.join(video_folder, name)
+                dst = os.path.join(sub_folder, name)
+                if os.path.exists(src):
+                    shutil.move(src, dst)
+    except Exception:
+        pass
+
+
+def move_audio_files(video_folder: str, audio_folder: str, index: int, title: str) -> None:
+    if not audio_folder or video_folder == audio_folder:
+        return
+    prefix = f"{index:03d} - {clean_filename(title)}"
+    os.makedirs(audio_folder, exist_ok=True)
+    try:
+        for name in os.listdir(video_folder):
+            if name.startswith(prefix) and name.endswith(".mp3"):
+                src = os.path.join(video_folder, name)
+                dst = os.path.join(audio_folder, name)
+                if os.path.exists(src):
+                    shutil.move(src, dst)
+    except Exception:
+        pass
+
+
 def download_single_video(
     video_id: str,
     title: str,
@@ -467,11 +509,18 @@ def download_single_video(
     anti_ban: AntiBanManager | None = None,
     retries: int = 0,
     use_chrome_cookie: bool = False,
+    download_video: bool = True,
+    download_sub: bool = False,
+    sub_locales: list[str] | None = None,
+    sub_folder: str | None = None,
+    download_audio: bool = False,
+    audio_folder: str | None = None,
 ) -> bool:
     if cancelled():
         return False
 
     url = f"https://www.youtube.com/watch?v={video_id}"
+
     clean_t = clean_filename(title)
     final_path = expected_video_path(output_folder, index, title)
 
@@ -479,15 +528,60 @@ def download_single_video(
 
     while True:
         try:
+            target_out_folder = output_folder
+            if not download_video:
+                if download_audio and audio_folder:
+                    target_out_folder = audio_folder
+                elif download_sub and sub_folder:
+                    target_out_folder = sub_folder
+
+            if not download_video and download_audio:
+                fmt = "bestaudio/best"
+            else:
+                fmt = quality_to_format(quality)
+
             ydl_opts: dict[str, Any] = {
                 "quiet": True,
-                "format": quality_to_format(quality),
+                "format": fmt,
                 "merge_output_format": "mp4",
-                "outtmpl": os.path.join(output_folder, f"{index:03d} - {clean_t}.%(ext)s"),
+                "outtmpl": os.path.join(target_out_folder, f"{index:03d} - {clean_t}.%(ext)s"),
                 "postprocessor_args": {
                     "Merger+ffmpeg_o": ["-movflags", "+faststart"],
                 },
+                "extractor_args": {
+                    "youtube": {
+                        "player_client": ["tv_embedded", "android_vr"]
+                    }
+                }
             }
+            if not download_video and not download_audio:
+                ydl_opts["skip_download"] = True
+
+            if download_video and download_audio:
+                ydl_opts["keepvideo"] = True
+
+            if download_audio:
+                ydl_opts["postprocessors"] = ydl_opts.get("postprocessors", []) + [
+                    {
+                        "key": "FFmpegExtractAudio",
+                        "preferredcodec": "mp3",
+                        "preferredquality": "192",
+                    }
+                ]
+
+            if download_sub:
+                ydl_opts["writesubtitles"] = True
+                ydl_opts["writeautomaticsub"] = True
+                ydl_opts["subtitlesformat"] = "srt"
+                if sub_locales:
+                    ydl_opts["subtitleslangs"] = sub_locales
+                ydl_opts["postprocessors"] = ydl_opts.get("postprocessors", []) + [
+                    {
+                        "key": "FFmpegSubtitlesConvertor",
+                        "format": "srt",
+                    }
+                ]
+
             if use_chrome_cookie:
                 ydl_opts["cookiesfrombrowser"] = ("chrome", )
             ffmpeg_bin = shutil.which("ffmpeg")
@@ -516,12 +610,19 @@ def download_single_video(
                 else:
                     raise
 
-            if not verify_merged_mp4(final_path):
-                cleanup_video_artifacts(output_folder, index, title)
-                on_log(
-                    f"[{index}] File MP4 không hợp lệ (thiếu video/audio hoặc ghép lỗi): {title}"
-                )
-                return False
+            if download_video:
+                if not verify_merged_mp4(final_path):
+                    cleanup_video_artifacts(output_folder, index, title)
+                    on_log(
+                        f"[{index}] File MP4 không hợp lệ (thiếu video/audio hoặc ghép lỗi): {title}"
+                    )
+                    return False
+
+            if download_sub and download_video and sub_folder and output_folder != sub_folder:
+                move_subtitle_files(output_folder, sub_folder, index, title)
+
+            if download_audio and download_video and audio_folder and output_folder != audio_folder:
+                move_audio_files(output_folder, audio_folder, index, title)
 
             if anti_ban:
                 anti_ban.increment_download_count()
@@ -597,6 +698,9 @@ def download_job_batch(
     download_video: bool,
     download_thumb: bool,
     quality: str,
+    download_sub: bool = False,
+    sub_folder: str | None = None,
+    sub_locales: list[str] | None = None,
     thumb_locales: list[str] | None = None,
     thumb_max_retries: int = 5,
     on_progress: Callable[[int, int], None] | None = None,
@@ -605,6 +709,8 @@ def download_job_batch(
     anti_ban_config: dict[str, Any] | None = None,
     max_workers: int = 1,
     use_chrome_cookie: bool = False,
+    download_audio: bool = False,
+    audio_folder: str | None = None,
 ) -> tuple[int, int]:
     is_cancelled = cancelled or (lambda: False)
     log = on_log or (lambda _m: None)
@@ -647,16 +753,26 @@ def download_job_batch(
 
     v_target = video_folder if video_folder else ""
     t_target = thumb_folder if thumb_folder else ""
+    s_target = sub_folder if sub_folder else ""
+    a_target = audio_folder if audio_folder else ""
 
     if download_video and v_target:
         os.makedirs(v_target, exist_ok=True)
     if download_thumb and t_target:
         os.makedirs(t_target, exist_ok=True)
+    if download_sub and s_target:
+        os.makedirs(s_target, exist_ok=True)
+    elif download_sub and v_target:
+        os.makedirs(v_target, exist_ok=True)
+    if download_audio and a_target:
+        os.makedirs(a_target, exist_ok=True)
+    elif download_audio and v_target:
+        os.makedirs(v_target, exist_ok=True)
 
     if download_thumb and t_target and thumb_locale_codes:
         log(f"Thumbnail theo ngôn ngữ (thư mục con): {', '.join(thumb_locale_codes)}")
 
-    master_folder = v_target if (download_video and v_target) else (t_target if (download_thumb and t_target) else "")
+    master_folder = v_target if (download_video and v_target) else (a_target if (download_audio and a_target) else (s_target if (download_sub and s_target) else (t_target if (download_thumb and t_target) else "")))
     existing_titles, max_idx = get_existing_titles(master_folder)
     if existing_titles:
         log(f"[Resume] Phát hiện {len(existing_titles)} file đã tải trong thư mục. Index lớn nhất hiện tại: {max_idx}")
@@ -695,19 +811,33 @@ def download_job_batch(
 
         item_ok = True
 
-        if download_video and v_target:
-            log(f"[{i}] (File #{current_idx:03d}) Đang tải video: {title}...")
+        if (download_video and v_target) or (download_audio and (a_target or v_target)) or (download_sub and (s_target or v_target)):
+            action_desc = []
+            if download_video:
+                action_desc.append("video")
+            if download_audio:
+                action_desc.append("audio")
+            if download_sub:
+                action_desc.append("phụ đề")
+            action_str = " + ".join(action_desc)
+            log(f"[{i}] (File #{current_idx:03d}) Đang tải {action_str}: {title}...")
             v_success = download_single_video(
-                video_id, title, current_idx, v_target, quality,
+                video_id, title, current_idx, v_target or a_target or s_target, quality,
                 on_log=log, cancelled=is_cancelled,
                 anti_ban=anti_ban,
                 retries=anti_ban_config.get("max_retries", 3) if anti_ban_config else 0,
                 use_chrome_cookie=use_chrome_cookie,
+                download_video=download_video,
+                download_sub=download_sub,
+                sub_locales=sub_locales,
+                sub_folder=s_target,
+                download_audio=download_audio,
+                audio_folder=a_target,
             )
             if not v_success:
                 item_ok = False
-                log(f"[{i}] (File #{current_idx:03d}) Tải video thất bại: {title}")
-                if anti_ban_config:
+                log(f"[{i}] (File #{current_idx:03d}) Tải {action_str} thất bại: {title}")
+                if download_video and anti_ban_config:
                     failed_logger.log_failed_url(
                         f"https://www.youtube.com/watch?v={video_id}",
                         "video_download_failed",
