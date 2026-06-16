@@ -13,6 +13,11 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
+# Global rate limiter cho subtitle requests để tránh 429 khi dùng nhiều threads
+_subtitle_lock = threading.Lock()
+_subtitle_last_request_time = 0.0
+_SUBTITLE_MIN_INTERVAL = 2.0  # Tối thiểu 2 giây giữa mỗi subtitle request
+
 import requests
 import yt_dlp
 
@@ -23,7 +28,7 @@ YDL_OPTS: dict[str, Any] = {
     "extract_flat": True,
     "extractor_args": {
         "youtube": {
-            "player_client": ["tv_embedded", "android_vr"]
+            "player_client": ["android", "web"]
         }
     }
 }
@@ -49,6 +54,18 @@ def normalize_thumb_locales(locales: list[str] | None) -> list[str]:
         seen.add(c)
         out.append(c)
     return out
+
+
+def get_cookie_browser_name(cookie_browser: str | bool) -> str | None:
+    if isinstance(cookie_browser, bool):
+        return "chrome" if cookie_browser else None
+    if not cookie_browser:
+        return None
+    val = str(cookie_browser).strip().lower()
+    if val in ("không dùng", "none", "false", ""):
+        return None
+    return val
+
 
 
 def clean_filename(name: str) -> str:
@@ -143,23 +160,28 @@ def _folder_name_from_info(info: dict[str, Any]) -> str:
     return "Unknown"
 
 
-def extract_videos_from_url(url: str, use_chrome_cookie: bool = False) -> tuple[dict[str, Any], list[tuple[str, str]]]:
+def extract_videos_from_url(url: str, cookie_browser: str | bool = "Không dùng") -> tuple[dict[str, Any], list[tuple[str, str]]]:
     """
     Lấy metadata + danh sách [(video_id, cleaned_title), ...].
     Raises yt_dlp.utils.DownloadError hoặc ValueError nếu không có video.
     """
     ydl_opts = YDL_OPTS.copy()
-    if use_chrome_cookie:
-        ydl_opts["cookiesfrombrowser"] = ("chrome", )
+    browser_name = get_cookie_browser_name(cookie_browser)
+    if browser_name:
+        ydl_opts["cookiesfrombrowser"] = (browser_name, )
+    elif os.path.exists("cookies.txt"):
+        ydl_opts["cookiefile"] = "cookies.txt"
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
     except yt_dlp.utils.DownloadError as e:
         err_msg = str(e)
-        if "cookiesfrombrowser" in ydl_opts and ("Chrome cookie" in err_msg or "cookie" in err_msg.lower()):
-            print("[Warning] Lỗi sao chép dữ liệu cookie từ Chrome (có thể Chrome đang mở). Đang thử tải lại không dùng cookie...")
+        if "cookiesfrombrowser" in ydl_opts and ("cookie" in err_msg.lower() or "decryption" in err_msg.lower() or "dpapi" in err_msg.lower()):
+            print(f"[Warning] Lỗi lấy cookie từ trình duyệt {browser_name} (có thể trình duyệt đang mở hoặc bị mã hóa). Đang thử tải lại với cookies.txt hoặc không dùng cookie...")
             ydl_opts.pop("cookiesfrombrowser", None)
+            if os.path.exists("cookies.txt"):
+                ydl_opts["cookiefile"] = "cookies.txt"
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=False)
         else:
@@ -179,18 +201,18 @@ def extract_videos_from_url(url: str, use_chrome_cookie: bool = False) -> tuple[
     return info, videos
 
 
-def list_videos_from_url(url: str, use_chrome_cookie: bool = False) -> list[tuple[str, str]]:
+def list_videos_from_url(url: str, cookie_browser: str | bool = "Không dùng") -> list[tuple[str, str]]:
     """[(video_id, cleaned_title), ...] — chỉ danh sách video."""
-    _, videos = extract_videos_from_url(url, use_chrome_cookie=use_chrome_cookie)
+    _, videos = extract_videos_from_url(url, cookie_browser=cookie_browser)
     return videos
 
 
-def summarize_url_videos(url: str, use_chrome_cookie: bool = False) -> tuple[int, str]:
+def summarize_url_videos(url: str, cookie_browser: str | bool = "Không dùng") -> tuple[int, str]:
     """
     Quét URL (kênh / tab / playlist / video đơn) với extract_flat.
     Trả về (số mục video, nhãn nguồn: kênh / playlist / tên).
     """
-    info, videos = extract_videos_from_url(url, use_chrome_cookie=use_chrome_cookie)
+    info, videos = extract_videos_from_url(url, cookie_browser=cookie_browser)
     label = _folder_name_from_info(info)
     return len(videos), label
 
@@ -233,7 +255,7 @@ def fetch_video_title_for_locale(
     *,
     fallback_title: str,
     cancelled: Callable[[], bool] | None = None,
-    use_chrome_cookie: bool = False,
+    cookie_browser: str | bool = "Không dùng",
 ) -> str:
     """Trích tiêu đề watch page với Accept-Language tương ứng locale."""
     is_cancelled = cancelled or (lambda: False)
@@ -255,16 +277,21 @@ def fetch_video_title_for_locale(
             }
         }
     }
-    if use_chrome_cookie:
-        ydl_opts["cookiesfrombrowser"] = ("chrome", )
+    browser_name = get_cookie_browser_name(cookie_browser)
+    if browser_name:
+        ydl_opts["cookiesfrombrowser"] = (browser_name, )
+    elif os.path.exists("cookies.txt"):
+        ydl_opts["cookiefile"] = "cookies.txt"
     try:
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=False)
         except Exception as e:
             err_msg = str(e)
-            if "cookiesfrombrowser" in ydl_opts and ("Chrome cookie" in err_msg or "cookie" in err_msg.lower()):
+            if "cookiesfrombrowser" in ydl_opts and ("cookie" in err_msg.lower() or "decryption" in err_msg.lower() or "dpapi" in err_msg.lower()):
                 ydl_opts.pop("cookiesfrombrowser", None)
+                if os.path.exists("cookies.txt"):
+                    ydl_opts["cookiefile"] = "cookies.txt"
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     info = ydl.extract_info(url, download=False)
             else:
@@ -303,7 +330,7 @@ def download_thumbnail_multi_locale(
     *,
     cancelled: Callable[[], bool] | None = None,
     max_retries: int = 5,
-    use_chrome_cookie: bool = False,
+    cookie_browser: str | bool = "Không dùng",
 ) -> bool:
     """
     Tải thumbnail một lần, ghi vào base_folder/<locale>/ với tiêu đề theo từng ngôn ngữ.
@@ -322,7 +349,7 @@ def download_thumbnail_multi_locale(
             loc,
             fallback_title=clean_fallback,
             cancelled=cancelled,
-            use_chrome_cookie=use_chrome_cookie,
+            cookie_browser=cookie_browser,
         )
         locale_folder = os.path.join(base_folder, loc)
         if not save_thumbnail_jpeg(locale_folder, index, title_loc, data):
@@ -339,7 +366,7 @@ def download_thumbnails_batch(
     on_progress: Callable[[int, int], None] | None = None,
     on_log: Callable[[str], None] | None = None,
     cancelled: Callable[[], bool] | None = None,
-    use_chrome_cookie: bool = False,
+    cookie_browser: str | bool = "Không dùng",
 ) -> tuple[int, int]:
     """
     Tải toàn bộ thumbnail cho URL.
@@ -355,7 +382,7 @@ def download_thumbnails_batch(
     log = on_log or (lambda _m: None)
     prog = on_progress or (lambda _c, _t: None)
 
-    info, videos = extract_videos_from_url(url, use_chrome_cookie=use_chrome_cookie)
+    info, videos = extract_videos_from_url(url, cookie_browser=cookie_browser)
     sub = _folder_name_from_info(info)
     target_folder = os.path.join(output_folder, sub)
     os.makedirs(target_folder, exist_ok=True)
@@ -376,7 +403,7 @@ def download_thumbnails_batch(
         prog(i, total)
         if locales:
             if download_thumbnail_multi_locale(
-                video_id, title, i, target_folder, locales, cancelled=is_cancelled, max_retries=thumb_max_retries, use_chrome_cookie=use_chrome_cookie
+                video_id, title, i, target_folder, locales, cancelled=is_cancelled, max_retries=thumb_max_retries, cookie_browser=cookie_browser
             ):
                 ok += 1
                 log(f"[{i}] Downloaded ({', '.join(locales)}): {title}")
@@ -508,7 +535,7 @@ def download_single_video(
     cancelled: Callable[[], bool],
     anti_ban: AntiBanManager | None = None,
     retries: int = 0,
-    use_chrome_cookie: bool = False,
+    cookie_browser: str | bool = "Không dùng",
     download_video: bool = True,
     download_sub: bool = False,
     sub_locales: list[str] | None = None,
@@ -550,7 +577,7 @@ def download_single_video(
                 },
                 "extractor_args": {
                     "youtube": {
-                        "player_client": ["tv_embedded", "android_vr"]
+                        "player_client": ["android", "web"]
                     }
                 }
             }
@@ -569,27 +596,22 @@ def download_single_video(
                     }
                 ]
 
-            if download_sub:
-                ydl_opts["writesubtitles"] = True
-                ydl_opts["writeautomaticsub"] = True
-                ydl_opts["subtitlesformat"] = "srt"
-                if sub_locales:
-                    ydl_opts["subtitleslangs"] = sub_locales
-                ydl_opts["postprocessors"] = ydl_opts.get("postprocessors", []) + [
-                    {
-                        "key": "FFmpegSubtitlesConvertor",
-                        "format": "srt",
-                    }
-                ]
+            # Không cấu hình writesubtitles trong ydl_opts nữa để tránh 429 và DPAPI lỗi khi giải mã cookie.
+            # Ta sẽ tải thủ công bằng requests sau khi lấy được info_dict.
 
-            if use_chrome_cookie:
-                ydl_opts["cookiesfrombrowser"] = ("chrome", )
+            browser_name = get_cookie_browser_name(cookie_browser)
+            if browser_name:
+                ydl_opts["cookiesfrombrowser"] = (browser_name, )
+            elif os.path.exists("cookies.txt"):
+                ydl_opts["cookiefile"] = "cookies.txt"
             ffmpeg_bin = shutil.which("ffmpeg")
             if ffmpeg_bin:
                 ydl_opts["ffmpeg_location"] = ffmpeg_bin
 
             if anti_ban:
                 ydl_opts = anti_ban.create_ydl_opts(ydl_opts)
+                if ydl_opts.get("proxy"):
+                    on_log(f"[{index}] 🌐 Proxy: {ydl_opts['proxy']}")
 
             def progress_hook(d: dict[str, Any]) -> None:
                 if cancelled():
@@ -597,16 +619,23 @@ def download_single_video(
 
             ydl_opts["progress_hooks"] = [progress_hook]
 
+            info_dict = None
+            # Nếu chỉ tải sub (không video, không audio) → dùng download=False như test.py
+            # để giảm tải request lên YouTube, tránh bị 429
+            only_sub = download_sub and not download_video and not download_audio
+            do_download = not only_sub
             try:
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    ydl.download([url])
+                    info_dict = ydl.extract_info(url, download=do_download)
             except yt_dlp.utils.DownloadError as e:
                 err_msg = str(e)
-                if "cookiesfrombrowser" in ydl_opts and ("Chrome cookie" in err_msg or "cookie" in err_msg.lower()):
-                    on_log(f"[{index}] Lỗi sao chép dữ liệu cookie từ Chrome (có thể Chrome đang mở). Đang thử tải lại không dùng cookie...")
+                if "cookiesfrombrowser" in ydl_opts and ("cookie" in err_msg.lower() or "decryption" in err_msg.lower() or "dpapi" in err_msg.lower()):
+                    on_log(f"[{index}] Lỗi lấy cookie từ trình duyệt {browser_name} (có thể trình duyệt đang mở hoặc bị mã hóa). Đang thử tải lại với cookies.txt hoặc không dùng cookie...")
                     ydl_opts.pop("cookiesfrombrowser", None)
+                    if os.path.exists("cookies.txt"):
+                        ydl_opts["cookiefile"] = "cookies.txt"
                     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                        ydl.download([url])
+                        info_dict = ydl.extract_info(url, download=do_download)
                 else:
                     raise
 
@@ -618,8 +647,112 @@ def download_single_video(
                     )
                     return False
 
-            if download_sub and download_video and sub_folder and output_folder != sub_folder:
-                move_subtitle_files(output_folder, sub_folder, index, title)
+            # Tải phụ đề thủ công tương tự file test.py bằng requests
+            if download_sub and info_dict:
+                target_sub_folder = sub_folder if sub_folder else output_folder
+                os.makedirs(target_sub_folder, exist_ok=True)
+
+                auto_caps = info_dict.get("automatic_captions", {})
+                manual_subs = info_dict.get("subtitles", {})
+                all_available_langs = set(list(auto_caps.keys()) + list(manual_subs.keys()))
+
+                langs_to_download = []
+                if sub_locales and "all" not in sub_locales:
+                    langs_to_download = [lang for lang in sub_locales if lang in all_available_langs]
+                else:
+                    langs_to_download = list(all_available_langs)
+
+                if langs_to_download:
+                    on_log(f"[{index}] Đang tải phụ đề bằng requests cho các ngôn ngữ: {', '.join(langs_to_download)}...")
+                else:
+                    on_log(f"[{index}] Không tìm thấy phụ đề phù hợp.")
+
+                # ✅ KHÔNG gửi headers và cookies khi tải subtitle (giống test.py)
+                # YouTube subtitle URL là public, gửi cookies/headers khiến YouTube
+                # nhận diện session → rate limit 429
+
+                for lang_code in langs_to_download:
+                    sub_url = None
+                    # ✅ Ưu tiên phụ đề thủ công trước (chính xác hơn, không bị lẫn ngôn ngữ)
+                    if lang_code in manual_subs:
+                        for fmt in manual_subs[lang_code]:
+                            if fmt.get("ext") == "srt":
+                                sub_url = fmt["url"]
+                                break
+                        if not sub_url and manual_subs[lang_code]:
+                            sub_url = manual_subs[lang_code][0].get("url")
+
+                    # Dự phòng: phụ đề tự động (auto-caption)
+                    if not sub_url and lang_code in auto_caps:
+                        for fmt in auto_caps[lang_code]:
+                            if fmt.get("ext") == "srt":
+                                # ✅ Giữ nguyên URL (bao gồm &tlang=) để YouTube trả về đúng ngôn ngữ
+                                sub_url = fmt["url"]
+                                break
+                        if not sub_url and auto_caps[lang_code]:
+                            sub_url = auto_caps[lang_code][0].get("url")
+
+                    if sub_url:
+                        max_sub_retries = 5
+                        sub_success = False
+
+                        # ✅ Tạo session với proxy (giống test.py)
+                        sub_session = requests.Session()
+                        if anti_ban and anti_ban.proxy_list:
+                            sub_proxy = anti_ban.get_next_proxy()
+                            sub_session.proxies = {
+                                "http": sub_proxy,
+                                "https": sub_proxy,
+                            }
+                            on_log(f"[{index}] 🌐 Sub proxy: {sub_proxy}")
+
+                        for sub_attempt in range(max_sub_retries):
+                            try:
+                                # Rate limit: chờ đủ khoảng cách giữa các request phụ đề
+                                global _subtitle_last_request_time
+                                with _subtitle_lock:
+                                    now = time.time()
+                                    elapsed = now - _subtitle_last_request_time
+                                    if elapsed < _SUBTITLE_MIN_INTERVAL:
+                                        wait_time = _SUBTITLE_MIN_INTERVAL - elapsed
+                                        time.sleep(wait_time)
+                                    _subtitle_last_request_time = time.time()
+
+                                # Khi bị 429 retry, đổi proxy mới
+                                if sub_attempt > 0 and anti_ban and anti_ban.proxy_list:
+                                    sub_proxy = anti_ban.get_next_proxy()
+                                    sub_session.proxies = {
+                                        "http": sub_proxy,
+                                        "https": sub_proxy,
+                                    }
+                                    on_log(f"[{index}] 🔄 Đổi proxy: {sub_proxy}")
+
+                                sub_resp = sub_session.get(sub_url, timeout=30)
+                                if sub_resp.status_code == 200:
+                                    sub_filename = f"{index:03d} - {clean_t}.{lang_code}.srt"
+                                    sub_path = os.path.join(target_sub_folder, sub_filename)
+                                    with open(sub_path, "w", encoding="utf-8") as sf:
+                                        sf.write(sub_resp.text)
+                                    on_log(f"[{index}] Đã tải thành công phụ đề ({lang_code}): {title}")
+                                    sub_success = True
+                                    break
+                                elif sub_resp.status_code == 429:
+                                    # Rate limited — chờ rồi thử lại
+                                    backoff_delay = min(10 * (2 ** sub_attempt), 120) + random.uniform(1, 5)
+                                    on_log(f"[{index}] Phụ đề ({lang_code}) bị rate limit (429), chờ {backoff_delay:.0f}s... (lần {sub_attempt+1}/{max_sub_retries})")
+                                    time.sleep(backoff_delay)
+                                    continue
+                                else:
+                                    on_log(f"[{index}] Lỗi tải phụ đề ({lang_code}) HTTP {sub_resp.status_code}: {title}")
+                                    break  # Lỗi khác thì không retry
+                            except Exception as sub_err:
+                                on_log(f"[{index}] Lỗi khi tải phụ đề ({lang_code}): {sub_err}")
+                                if sub_attempt < max_sub_retries - 1:
+                                    time.sleep(5 * (sub_attempt + 1))
+                                    continue
+                                break
+                        if not sub_success:
+                            on_log(f"[{index}] Không thể tải phụ đề ({lang_code}) sau {max_sub_retries} lần thử: {title}")
 
             if download_audio and download_video and audio_folder and output_folder != audio_folder:
                 move_audio_files(output_folder, audio_folder, index, title)
@@ -708,7 +841,7 @@ def download_job_batch(
     cancelled: Callable[[], bool] | None = None,
     anti_ban_config: dict[str, Any] | None = None,
     max_workers: int = 1,
-    use_chrome_cookie: bool = False,
+    cookie_browser: str | bool = "Không dùng",
     download_audio: bool = False,
     audio_folder: str | None = None,
 ) -> tuple[int, int]:
@@ -748,7 +881,7 @@ def download_job_batch(
             api_video_dict[v['id']] = v
     except Exception as e:
         log(f"[Google API] Lỗi: {e}. Đang dùng yt-dlp dự phòng...")
-        info, videos = extract_videos_from_url(url, use_chrome_cookie=use_chrome_cookie)
+        info, videos = extract_videos_from_url(url, cookie_browser=cookie_browser)
         sub = _folder_name_from_info(info)
 
     v_target = video_folder if video_folder else ""
@@ -826,7 +959,7 @@ def download_job_batch(
                 on_log=log, cancelled=is_cancelled,
                 anti_ban=anti_ban,
                 retries=anti_ban_config.get("max_retries", 3) if anti_ban_config else 0,
-                use_chrome_cookie=use_chrome_cookie,
+                cookie_browser=cookie_browser,
                 download_video=download_video,
                 download_sub=download_sub,
                 sub_locales=sub_locales,
@@ -865,7 +998,7 @@ def download_job_batch(
                         thumb_locale_codes,
                         cancelled=is_cancelled,
                         max_retries=thumb_max_retries,
-                        use_chrome_cookie=use_chrome_cookie,
+                        cookie_browser=cookie_browser,
                     )
                 else:
                     t_success = download_thumbnail_file(video_id, title, current_idx, t_target, max_retries=thumb_max_retries)
@@ -889,11 +1022,18 @@ def download_job_batch(
 
     if max_workers > 1:
         log(f"[Parallel] Sử dụng {max_workers} threads để tải...")
+        # Dùng Semaphore để kiểm soát tốc độ submit, tránh gửi hết cùng lúc
+        submit_delay = anti_ban.get_random_delay() if anti_ban else 3.0
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = {
-                executor.submit(download_single_item, i, vid, title): (i, vid, title)
-                for i, (vid, title) in enumerate(videos, start=1)
-            }
+            futures = {}
+            for i, (vid, title) in enumerate(videos, start=1):
+                if is_cancelled():
+                    break
+                future = executor.submit(download_single_item, i, vid, title)
+                futures[future] = (i, vid, title)
+                # Delay nhỏ giữa mỗi lần submit để giãn request ra
+                if i < len(videos):
+                    time.sleep(random.uniform(1.0, submit_delay / max_workers))
             for future in as_completed(futures):
                 if is_cancelled():
                     break

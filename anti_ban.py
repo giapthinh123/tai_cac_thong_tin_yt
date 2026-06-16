@@ -133,10 +133,16 @@ class AntiBanManager:
         }
 
         if self.proxy_list:
-            opts["proxy"] = self.get_next_proxy()
+            proxy = self.get_next_proxy()
+            opts["proxy"] = proxy
+            print(f"[AntiBan] Sử dụng proxy: {proxy}")
 
         if extra_opts:
+            # Đảm bảo proxy không bị ghi đè bởi extra_opts
+            saved_proxy = opts.get("proxy")
             opts.update(extra_opts)
+            if saved_proxy and "proxy" not in extra_opts:
+                opts["proxy"] = saved_proxy
 
         return opts
 

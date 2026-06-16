@@ -35,13 +35,7 @@ def _get_settings_path() -> str:
 
 def _load_settings() -> dict:
     path = _get_settings_path()
-    if os.path.exists(path):
-        try:
-            with open(path, encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            pass
-    return {
+    default_settings = {
         "video_folder": "",
         "thumb_folder": "",
         "sub_folder": "",
@@ -59,8 +53,26 @@ def _load_settings() -> dict:
         "sub_locale_en": True,
         "custom_sub_locale": "",
         "concurrent_count": 2,
-        "use_chrome_cookie": False
+        "use_chrome_cookie": False,
+        "cookie_browser": "Không dùng",
+        "proxy_enabled": False,
+        "proxy_list": ""
     }
+    if os.path.exists(path):
+        try:
+            with open(path, encoding="utf-8") as f:
+                loaded = json.load(f)
+                # Migration: if use_chrome_cookie was True, default cookie_browser to Chrome
+                if loaded.get("use_chrome_cookie", False) and loaded.get("cookie_browser", "Không dùng") == "Không dùng":
+                    loaded["cookie_browser"] = "Chrome"
+                # merge with defaults
+                for k, v in default_settings.items():
+                    loaded.setdefault(k, v)
+                return loaded
+        except Exception:
+            pass
+    return default_settings
+
 
 def _save_settings(settings: dict) -> None:
     path = _get_settings_path()
@@ -93,7 +105,7 @@ class DownloadWorker(QObject):
         anti_ban_config: dict | None = None,
         max_workers: int = 1,
         retry_urls: list[str] | None = None,
-        use_chrome_cookie: bool = False,
+        cookie_browser: str = "Không dùng",
         download_sub: bool = False,
         sub_locales: list[str] | None = None,
         sub_folder: str | None = None,
@@ -112,7 +124,7 @@ class DownloadWorker(QObject):
         self._cancel_event = cancel_event
         self._anti_ban_config = anti_ban_config
         self._max_workers = max_workers
-        self._use_chrome_cookie = use_chrome_cookie
+        self._cookie_browser = cookie_browser
         self._download_sub = download_sub
         self._sub_locales = sub_locales
         self._sub_folder = sub_folder
@@ -144,7 +156,7 @@ class DownloadWorker(QObject):
                             cancelled=self._cancel_event.is_set,
                             anti_ban_config=self._anti_ban_config,
                             max_workers=self._max_workers,
-                            use_chrome_cookie=self._use_chrome_cookie,
+                            cookie_browser=self._cookie_browser,
                             download_audio=self._download_audio,
                             audio_folder=self._audio_folder,
                         )
@@ -171,7 +183,7 @@ class DownloadWorker(QObject):
                     cancelled=self._cancel_event.is_set,
                     anti_ban_config=self._anti_ban_config,
                     max_workers=self._max_workers,
-                    use_chrome_cookie=self._use_chrome_cookie,
+                    cookie_browser=self._cookie_browser,
                     download_audio=self._download_audio,
                     audio_folder=self._audio_folder,
                 )
@@ -220,7 +232,7 @@ class MainWindow(QWidget):
         self._cb_thumb.toggled.connect(lambda _: self._save_settings_to_file())
         self._cb_audio.toggled.connect(lambda _: self._save_settings_to_file())
         self._cb_sub.toggled.connect(lambda _: self._save_settings_to_file())
-        self._cb_cookie.toggled.connect(lambda _: self._save_settings_to_file())
+        self._combo_cookie.currentTextChanged.connect(lambda _: self._save_settings_to_file())
         self._cb_thumb_locale_en.toggled.connect(lambda _: self._save_settings_to_file())
         self._cb_thumb_locale_ko.toggled.connect(lambda _: self._save_settings_to_file())
         self._cb_thumb_locale_ja.toggled.connect(lambda _: self._save_settings_to_file())
@@ -231,6 +243,8 @@ class MainWindow(QWidget):
         self._sub_folder_edit.textChanged.connect(lambda _: self._save_settings_to_file())
         self._audio_folder_edit.textChanged.connect(lambda _: self._save_settings_to_file())
         self._thread_spin.valueChanged.connect(lambda _: self._save_settings_to_file())
+        self._cb_proxy_enabled.toggled.connect(lambda _: self._save_settings_to_file())
+        self._proxy_edit.textChanged.connect(lambda: self._save_settings_to_file())
 
     def _on_quality_selected(self, btn):
         for b in self._quality_buttons:
@@ -269,7 +283,7 @@ class MainWindow(QWidget):
         self._cb_thumb.setChecked(s.get("download_thumb", True))
         self._cb_audio.setChecked(s.get("download_audio", False))
         self._cb_sub.setChecked(s.get("download_sub", False))
-        self._cb_cookie.setChecked(s.get("use_chrome_cookie", False))
+        self._combo_cookie.setCurrentText(s.get("cookie_browser", "Không dùng"))
         self._cb_thumb_locale_en.setChecked(s.get("thumb_locale_en", True))
         self._cb_thumb_locale_ko.setChecked(s.get("thumb_locale_ko", True))
         self._cb_thumb_locale_ja.setChecked(s.get("thumb_locale_ja", True))
@@ -278,6 +292,8 @@ class MainWindow(QWidget):
         self._cb_sub_locale_en.setChecked(s.get("sub_locale_en", True))
         self._custom_sub_locale_edit.setText(s.get("custom_sub_locale", ""))
         self._thread_spin.setValue(s.get("concurrent_count", 2))
+        self._cb_proxy_enabled.setChecked(s.get("proxy_enabled", False))
+        self._proxy_edit.setPlainText(s.get("proxy_list", ""))
         quality = s.get("quality", "720p")
         for b in self._quality_buttons:
             b.setChecked(b.text() == quality)
@@ -293,7 +309,8 @@ class MainWindow(QWidget):
             "download_thumb": self._cb_thumb.isChecked(),
             "download_audio": self._cb_audio.isChecked(),
             "download_sub": self._cb_sub.isChecked(),
-            "use_chrome_cookie": self._cb_cookie.isChecked(),
+            "use_chrome_cookie": self._combo_cookie.currentText() == "Chrome",
+            "cookie_browser": self._combo_cookie.currentText(),
             "thumb_locale_en": self._cb_thumb_locale_en.isChecked(),
             "thumb_locale_ko": self._cb_thumb_locale_ko.isChecked(),
             "thumb_locale_ja": self._cb_thumb_locale_ja.isChecked(),
@@ -301,7 +318,9 @@ class MainWindow(QWidget):
             "sub_locale_vi": self._cb_sub_locale_vi.isChecked(),
             "sub_locale_en": self._cb_sub_locale_en.isChecked(),
             "custom_sub_locale": self._custom_sub_locale_edit.text().strip(),
-            "concurrent_count": self._thread_spin.value()
+            "concurrent_count": self._thread_spin.value(),
+            "proxy_enabled": self._cb_proxy_enabled.isChecked(),
+            "proxy_list": self._proxy_edit.toPlainText()
         }
         _save_settings(settings)
 
@@ -453,9 +472,10 @@ class MainWindow(QWidget):
         self._cancel_btn.setEnabled(True)
 
         proxy_list = []
-        proxy_text = self._proxy_edit.text().strip() if hasattr(self, '_proxy_edit') else ""
-        if proxy_text:
-            proxy_list = [p.strip() for p in proxy_text.split(",") if p.strip()]
+        if self._cb_proxy_enabled.isChecked():
+            proxy_text = self._proxy_edit.toPlainText().strip()
+            if proxy_text:
+                proxy_list = [p.strip() for p in proxy_text.splitlines() if p.strip()]
 
         max_workers = self._thread_spin.value() if hasattr(self, '_thread_spin') else 1
 
@@ -469,6 +489,15 @@ class MainWindow(QWidget):
             "use_fake_ua": True,
             "max_retries": 3,
         }
+
+        # Log proxy info
+        if proxy_list:
+            self._log.appendPlainText(f"✅ Proxy đã bật — {len(proxy_list)} proxy:")
+            for i, px in enumerate(proxy_list, 1):
+                self._log.appendPlainText(f"   [{i}] {px}")
+            self._log.appendPlainText("   (Sử dụng round-robin xoay vòng giữa các proxy)")
+        else:
+            self._log.appendPlainText("⚠ Không sử dụng proxy (kết nối trực tiếp)")
 
         if max_workers > 1:
             self._log.appendPlainText(f"Sử dụng {max_workers} threads để tải song song")
@@ -486,7 +515,7 @@ class MainWindow(QWidget):
             anti_ban_config=anti_ban_config,
             max_workers=max_workers,
             retry_urls=self._retry_urls if self._retry_urls else None,
-            use_chrome_cookie=self._cb_cookie.isChecked(),
+            cookie_browser=self._combo_cookie.currentText(),
             download_sub=dl_sub,
             sub_locales=sub_locales,
             sub_folder=s_folder,

@@ -5,6 +5,7 @@ from __future__ import annotations
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -165,15 +166,51 @@ def setup_thumb_download_ui(win: QWidget) -> None:
     cb_audio.setChecked(False)
     cb_sub = QCheckBox("Phụ đề")
     cb_sub.setChecked(False)
-    cb_cookie = QCheckBox("Sử dụng Cookie Chrome")
-    cb_cookie.setChecked(False)
-    cb_cookie.setToolTip("Sử dụng Cookie từ Chrome để tải video giới hạn độ tuổi hoặc video riêng tư.")
     chk_row.addWidget(cb_video)
     chk_row.addWidget(cb_thumb)
     chk_row.addWidget(cb_audio)
     chk_row.addWidget(cb_sub)
-    chk_row.addWidget(cb_cookie)
     chk_row.addStretch(1)
+
+    cookie_row = QHBoxLayout()
+    cookie_row.setSpacing(10)
+    cookie_lab = QLabel("Cookie từ trình duyệt:")
+    cookie_lab.setStyleSheet("color:#374151;font-size:13px;")
+    combo_cookie = QComboBox()
+    combo_cookie.addItems(["Không dùng", "Chrome", "Firefox", "Edge"])
+    combo_cookie.setStyleSheet("padding:4px;border:1px solid #d1d5db;border-radius:4px;background-color:white;min-width:120px;")
+    combo_cookie.setToolTip("Chọn trình duyệt để lấy Cookie. Giúp tải các video giới hạn độ tuổi, riêng tư hoặc tránh bị chặn IP (lỗi 429).")
+    cookie_row.addWidget(cookie_lab, alignment=Qt.AlignVCenter)
+    cookie_row.addWidget(combo_cookie, alignment=Qt.AlignVCenter)
+    cookie_row.addStretch(1)
+
+    # —— PROXY ——
+    proxy_header_row = QHBoxLayout()
+    proxy_header_row.setSpacing(10)
+    cb_proxy_enabled = QCheckBox("Sử dụng Proxy")
+    cb_proxy_enabled.setChecked(False)
+    cb_proxy_enabled.setToolTip("Bật/tắt sử dụng proxy khi tải. Giúp tránh bị chặn IP (lỗi 429).")
+    cb_proxy_enabled.setStyleSheet("color:#374151;font-size:13px;font-weight:600;")
+    proxy_hint = QLabel("Mỗi proxy một dòng — Định dạng: http://user:pass@ip:port")
+    proxy_hint.setStyleSheet("color:#9ca3af;font-size:11px;font-style:italic;")
+    proxy_header_row.addWidget(cb_proxy_enabled, alignment=Qt.AlignVCenter)
+    proxy_header_row.addWidget(proxy_hint, alignment=Qt.AlignVCenter)
+    proxy_header_row.addStretch(1)
+
+    proxy_edit = QPlainTextEdit()
+    proxy_edit.setPlaceholderText(
+        "Nhập proxy (mỗi dòng một proxy), ví dụ:\n"
+        "http://user:pass@103.179.172.29:14498\n"
+        "socks5://user:pass@192.168.1.1:1080\n"
+        "http://10.0.0.1:8080"
+    )
+    proxy_edit.setFixedHeight(90)
+    proxy_edit.setStyleSheet(
+        "padding:6px;border:1px solid #d1d5db;border-radius:6px;"
+        "background-color:white;font-size:12px;font-family:Consolas,monospace;"
+    )
+    proxy_edit.setEnabled(False)  # disabled by default until checkbox is checked
+    cb_proxy_enabled.toggled.connect(proxy_edit.setEnabled)
 
     thumb_loc_row = QHBoxLayout()
     thumb_loc_row.setSpacing(14)
@@ -236,6 +273,9 @@ def setup_thumb_download_ui(win: QWidget) -> None:
 
     set_outer.addLayout(qual_row)
     set_outer.addLayout(chk_row)
+    set_outer.addLayout(cookie_row)
+    set_outer.addLayout(proxy_header_row)
+    set_outer.addWidget(proxy_edit)
     set_outer.addLayout(thumb_loc_row)
     set_outer.addLayout(sub_loc_row)
     set_outer.addLayout(conc_row)
@@ -354,7 +394,7 @@ def setup_thumb_download_ui(win: QWidget) -> None:
     win._cb_thumb = cb_thumb
     win._cb_audio = cb_audio
     win._cb_sub = cb_sub
-    win._cb_cookie = cb_cookie
+    win._combo_cookie = combo_cookie
     win._thumb_locale_label = thumb_loc_lab
     win._cb_thumb_locale_en = cb_thumb_locale_en
     win._cb_thumb_locale_ko = cb_thumb_locale_ko
@@ -369,3 +409,5 @@ def setup_thumb_download_ui(win: QWidget) -> None:
     win._audio_folder_edit = audio_folder
     win._audio_folder_browse_btn = btn_pick_audio
     win._thread_spin = spin
+    win._proxy_edit = proxy_edit
+    win._cb_proxy_enabled = cb_proxy_enabled
