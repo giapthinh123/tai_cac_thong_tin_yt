@@ -31,7 +31,12 @@ def get_resource_path(relative_path):
     return os.path.join(base_path, relative_path)
 
 def _get_settings_path() -> str:
-    return get_resource_path("settings.json")
+    # Lưu settings cạnh file exe (hoặc script), không trong _MEIPASS (thư mục tạm)
+    if getattr(sys, 'frozen', False):
+        base = os.path.dirname(sys.executable)
+    else:
+        base = os.path.abspath(".")
+    return os.path.join(base, "settings.json")
 
 def _load_settings() -> dict:
     path = _get_settings_path()
@@ -222,6 +227,8 @@ class MainWindow(QWidget):
         self._cb_sub.toggled.connect(lambda _c: self._sync_sub_locale_widgets())
         self._sync_thumb_locale_widgets()
         self._sync_sub_locale_widgets()
+        self._cb_proxy_enabled.toggled.connect(lambda c: self._proxy_edit.setVisible(c))
+        self._proxy_edit.setVisible(self._cb_proxy_enabled.isChecked())
 
         # Cập nhật logic cho quality pills (chỉ chọn 1)
         for b in self._quality_buttons:
@@ -480,9 +487,9 @@ class MainWindow(QWidget):
         max_workers = self._thread_spin.value() if hasattr(self, '_thread_spin') else 1
 
         anti_ban_config = {
-            "min_delay": 5.5,
-            "max_delay": 15.0,
-            "rate_limit": 5_000_000,
+            "min_delay": 8.0,
+            "max_delay": 25.0,
+            "rate_limit": 2_000_000,
             "proxy_list": proxy_list if proxy_list else None,
             "vpn_enabled": self._cb_vpn.isChecked() if hasattr(self, '_cb_vpn') else False,
             "vpn_change_interval": 30,

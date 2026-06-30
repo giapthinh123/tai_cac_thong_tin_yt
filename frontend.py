@@ -14,8 +14,10 @@ from PyQt5.QtWidgets import (
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QSpinBox,
+    QSplitter,
     QStackedWidget,
     QToolButton,
     QVBoxLayout,
@@ -33,8 +35,8 @@ def _stat_card(value_name: str) -> tuple[QFrame, QLabel, QLabel]:
     card = QFrame()
     card.setObjectName("StatCard")
     lay = QVBoxLayout(card)
-    lay.setContentsMargins(14, 10, 14, 10)
-    lay.setSpacing(2)
+    lay.setContentsMargins(10, 4, 10, 4)
+    lay.setSpacing(1)
     val = QLabel("0")
     val.setObjectName(value_name)
     val.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
@@ -50,14 +52,10 @@ def setup_thumb_download_ui(win: QWidget) -> None:
     """Gắn layout lên `win` và gán các thuộc tính widget cho MainWindow."""
     win.setObjectName("RootChrome")
 
-
-    head_left = QVBoxLayout()
-    head_left.setSpacing(2)
-
+    # ——— HEADER ROW: Title + Stats (full width) ———
     head_row = QHBoxLayout()
-    head_row.addLayout(head_left, stretch=1)
+    head_row.setSpacing(16)
 
-    # —— Stats ——
     stat_row = QHBoxLayout()
     stat_row.setSpacing(10)
 
@@ -73,11 +71,13 @@ def setup_thumb_download_ui(win: QWidget) -> None:
     for w in (c_total, c_dl, c_ok, c_er):
         stat_row.addWidget(w, stretch=1)
 
-    # —— THÊM URL ——
+    head_row.addLayout(stat_row)
+
+    # ——— URL INPUT (full width) ———
     url_card = _card()
     url_outer = QVBoxLayout(url_card)
-    url_outer.setContentsMargins(16, 14, 16, 14)
-    url_outer.setSpacing(12)
+    url_outer.setContentsMargins(12, 8, 12, 8)
+    url_outer.setSpacing(6)
 
     sec_url = QLabel("THÊM URL")
     sec_url.setObjectName("SectionTitle")
@@ -101,11 +101,15 @@ def setup_thumb_download_ui(win: QWidget) -> None:
     url_outer.addLayout(row1)
     url_outer.addWidget(url_scan)
 
-    # —— CÀI ĐẶT ——
+    # ——— TWO-COLUMN BODY (draggable splitter) ———
+    body_row = QSplitter(Qt.Horizontal)
+    body_row.setHandleWidth(6)
+
+    # ─── LEFT COLUMN: SETTINGS ───
     set_card = _card()
     set_outer = QVBoxLayout(set_card)
-    set_outer.setContentsMargins(16, 14, 16, 14)
-    set_outer.setSpacing(12)
+    set_outer.setContentsMargins(12, 8, 12, 8)
+    set_outer.setSpacing(8)
 
     sec_set = QLabel("CÀI ĐẶT")
     sec_set.setObjectName("SectionTitle")
@@ -178,8 +182,14 @@ def setup_thumb_download_ui(win: QWidget) -> None:
     cookie_lab.setStyleSheet("color:#374151;font-size:13px;")
     combo_cookie = QComboBox()
     combo_cookie.addItems(["Không dùng", "Chrome", "Firefox", "Edge"])
-    combo_cookie.setStyleSheet("padding:4px;border:1px solid #d1d5db;border-radius:4px;background-color:white;min-width:120px;")
-    combo_cookie.setToolTip("Chọn trình duyệt để lấy Cookie. Giúp tải các video giới hạn độ tuổi, riêng tư hoặc tránh bị chặn IP (lỗi 429).")
+    combo_cookie.setStyleSheet(
+        "padding:4px;border:1px solid #d1d5db;border-radius:4px;"
+        "background-color:white;min-width:120px;"
+    )
+    combo_cookie.setToolTip(
+        "Chọn trình duyệt để lấy Cookie. Giúp tải các video giới hạn độ tuổi, "
+        "riêng tư hoặc tránh bị chặn IP (lỗi 429)."
+    )
     cookie_row.addWidget(cookie_lab, alignment=Qt.AlignVCenter)
     cookie_row.addWidget(combo_cookie, alignment=Qt.AlignVCenter)
     cookie_row.addStretch(1)
@@ -189,10 +199,16 @@ def setup_thumb_download_ui(win: QWidget) -> None:
     proxy_header_row.setSpacing(10)
     cb_proxy_enabled = QCheckBox("Sử dụng Proxy")
     cb_proxy_enabled.setChecked(False)
-    cb_proxy_enabled.setToolTip("Bật/tắt sử dụng proxy khi tải. Giúp tránh bị chặn IP (lỗi 429).")
-    cb_proxy_enabled.setStyleSheet("color:#374151;font-size:13px;font-weight:600;")
+    cb_proxy_enabled.setToolTip(
+        "Bật/tắt sử dụng proxy khi tải. Giúp tránh bị chặn IP (lỗi 429)."
+    )
+    cb_proxy_enabled.setStyleSheet(
+        "color:#374151;font-size:13px;font-weight:600;"
+    )
     proxy_hint = QLabel("Mỗi proxy một dòng — Định dạng: http://user:pass@ip:port")
-    proxy_hint.setStyleSheet("color:#9ca3af;font-size:11px;font-style:italic;")
+    proxy_hint.setStyleSheet(
+        "color:#9ca3af;font-size:11px;font-style:italic;"
+    )
     proxy_header_row.addWidget(cb_proxy_enabled, alignment=Qt.AlignVCenter)
     proxy_header_row.addWidget(proxy_hint, alignment=Qt.AlignVCenter)
     proxy_header_row.addStretch(1)
@@ -204,12 +220,12 @@ def setup_thumb_download_ui(win: QWidget) -> None:
         "socks5://user:pass@192.168.1.1:1080\n"
         "http://10.0.0.1:8080"
     )
-    proxy_edit.setFixedHeight(90)
+    proxy_edit.setFixedHeight(80)
     proxy_edit.setStyleSheet(
         "padding:6px;border:1px solid #d1d5db;border-radius:6px;"
         "background-color:white;font-size:12px;font-family:Consolas,monospace;"
     )
-    proxy_edit.setEnabled(False)  # disabled by default until checkbox is checked
+    proxy_edit.setEnabled(False)
     cb_proxy_enabled.toggled.connect(proxy_edit.setEnabled)
 
     thumb_loc_row = QHBoxLayout()
@@ -231,7 +247,9 @@ def setup_thumb_download_ui(win: QWidget) -> None:
     custom_locale_edit = QLineEdit()
     custom_locale_edit.setPlaceholderText("vd: zh, fr, de")
     custom_locale_edit.setFixedWidth(80)
-    custom_locale_edit.setStyleSheet("padding:4px;border:1px solid #d1d5db;border-radius:4px;")
+    custom_locale_edit.setStyleSheet(
+        "padding:4px;border:1px solid #d1d5db;border-radius:4px;"
+    )
     thumb_loc_row.addWidget(custom_locale_lab, alignment=Qt.AlignVCenter)
     thumb_loc_row.addWidget(custom_locale_edit, alignment=Qt.AlignVCenter)
     thumb_loc_row.addStretch(1)
@@ -252,7 +270,9 @@ def setup_thumb_download_ui(win: QWidget) -> None:
     custom_sub_locale_edit = QLineEdit()
     custom_sub_locale_edit.setPlaceholderText("vd: ja, ko, zh")
     custom_sub_locale_edit.setFixedWidth(80)
-    custom_sub_locale_edit.setStyleSheet("padding:4px;border:1px solid #d1d5db;border-radius:4px;")
+    custom_sub_locale_edit.setStyleSheet(
+        "padding:4px;border:1px solid #d1d5db;border-radius:4px;"
+    )
     sub_loc_row.addWidget(custom_sub_locale_lab, alignment=Qt.AlignVCenter)
     sub_loc_row.addWidget(custom_sub_locale_edit, alignment=Qt.AlignVCenter)
     sub_loc_row.addStretch(1)
@@ -279,12 +299,21 @@ def setup_thumb_download_ui(win: QWidget) -> None:
     set_outer.addLayout(thumb_loc_row)
     set_outer.addLayout(sub_loc_row)
     set_outer.addLayout(conc_row)
+    set_outer.addStretch(1)
 
-    # —— HÀNG ĐỢI ——
+    # Wrap settings in scroll area (no fixed max height — lets it expand)
+    set_scroll = QScrollArea()
+    set_scroll.setWidget(set_card)
+    set_scroll.setWidgetResizable(True)
+    set_scroll.setFrameShape(QFrame.NoFrame)
+    set_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+    set_scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+
+    # ─── RIGHT COLUMN: QUEUE + LOG ───
     queue_card = _card()
     queue_outer = QVBoxLayout(queue_card)
-    queue_outer.setContentsMargins(16, 14, 16, 14)
-    queue_outer.setSpacing(10)
+    queue_outer.setContentsMargins(12, 8, 12, 8)
+    queue_outer.setSpacing(6)
 
     q_head = QHBoxLayout()
     sec_q = QLabel("HÀNG ĐỢI")
@@ -296,6 +325,7 @@ def setup_thumb_download_ui(win: QWidget) -> None:
     q_head.addStretch(1)
     q_head.addWidget(queue_count, alignment=Qt.AlignVCenter)
 
+    # Stack: empty placeholder vs active download view
     stack = QStackedWidget()
     stack.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
@@ -314,14 +344,16 @@ def setup_thumb_download_ui(win: QWidget) -> None:
     active_lay.setContentsMargins(0, 4, 0, 0)
     active_lay.setSpacing(8)
     task_title = QLabel("Đang tải…")
-    task_title.setStyleSheet("font-size:13px;font-weight:600;color:#111827;")
+    task_title.setStyleSheet(
+        "font-size:13px;font-weight:600;color:#111827;"
+    )
     progress = QProgressBar()
     progress.setRange(0, 1)
     progress.setValue(0)
     progress.setFormat("%p% — %v / %m")
     log = QPlainTextEdit()
     log.setReadOnly(True)
-    log.setMinimumHeight(160)
+    log.setMinimumHeight(120)
     active_lay.addWidget(task_title)
     active_lay.addWidget(progress)
     active_lay.addWidget(QLabel("Nhật ký"))
@@ -333,7 +365,13 @@ def setup_thumb_download_ui(win: QWidget) -> None:
     queue_outer.addLayout(q_head)
     queue_outer.addWidget(stack, stretch=1)
 
-    # —— Footer ——
+    # Assemble two-column body
+    body_row.addWidget(set_scroll)
+    body_row.addWidget(queue_card)
+    body_row.setStretchFactor(0, 3)   # settings column
+    body_row.setStretchFactor(1, 5)   # queue column
+
+    # ——— FOOTER ———
     foot = QHBoxLayout()
     foot.setSpacing(12)
     btn_clear = QPushButton("Xóa tất cả")
@@ -354,14 +392,13 @@ def setup_thumb_download_ui(win: QWidget) -> None:
     retry_btn.setToolTip("Tải lại các mục bị thất bại từ file failed_urls.txt")
     foot.addWidget(retry_btn)
 
+    # ——— ROOT LAYOUT ———
     root = QVBoxLayout(win)
-    root.setContentsMargins(18, 16, 18, 18)
-    root.setSpacing(14)
+    root.setContentsMargins(16, 12, 16, 12)
+    root.setSpacing(10)
     root.addLayout(head_row)
-    root.addLayout(stat_row)
     root.addWidget(url_card)
-    root.addWidget(set_card)
-    root.addWidget(queue_card, stretch=1)
+    root.addWidget(body_row, stretch=1)
     root.addLayout(foot)
 
     # Expose on host window (MainWindow)

@@ -13,10 +13,10 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
-# Global rate limiter cho subtitle requests để tránh 429 khi dùng nhiều threads
+# Global rate limiter cho subtitle requests
 _subtitle_lock = threading.Lock()
 _subtitle_last_request_time = 0.0
-_SUBTITLE_MIN_INTERVAL = 2.0  # Tối thiểu 2 giây giữa mỗi subtitle request
+_SUBTITLE_MIN_INTERVAL = 2.0
 
 import requests
 import yt_dlp
@@ -26,9 +26,10 @@ from anti_ban import AntiBanManager, ExponentialBackoff, FailedURLLogger
 YDL_OPTS: dict[str, Any] = {
     "quiet": True,
     "extract_flat": True,
+    "rm_cachedir": True,
     "extractor_args": {
         "youtube": {
-            "player_client": ["android", "web"]
+            "player_client": ["android"]
         }
     }
 }
@@ -166,11 +167,12 @@ def extract_videos_from_url(url: str, cookie_browser: str | bool = "Không dùng
     Raises yt_dlp.utils.DownloadError hoặc ValueError nếu không có video.
     """
     ydl_opts = YDL_OPTS.copy()
+    # Cookie: ưu tiên cookies.txt trước (static, kiểm soát được)
+    if os.path.exists("cookies.txt"):
+        ydl_opts["cookiefile"] = "cookies.txt"
     browser_name = get_cookie_browser_name(cookie_browser)
     if browser_name:
         ydl_opts["cookiesfrombrowser"] = (browser_name, )
-    elif os.path.exists("cookies.txt"):
-        ydl_opts["cookiefile"] = "cookies.txt"
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -178,10 +180,8 @@ def extract_videos_from_url(url: str, cookie_browser: str | bool = "Không dùng
     except yt_dlp.utils.DownloadError as e:
         err_msg = str(e)
         if "cookiesfrombrowser" in ydl_opts and ("cookie" in err_msg.lower() or "decryption" in err_msg.lower() or "dpapi" in err_msg.lower()):
-            print(f"[Warning] Lỗi lấy cookie từ trình duyệt {browser_name} (có thể trình duyệt đang mở hoặc bị mã hóa). Đang thử tải lại với cookies.txt hoặc không dùng cookie...")
+            print(f"[Warning] Lỗi lấy cookie từ trình duyệt {browser_name} (có thể trình duyệt đang mở hoặc bị mã hóa). Đang thử tải lại với cookies.txt...")
             ydl_opts.pop("cookiesfrombrowser", None)
-            if os.path.exists("cookies.txt"):
-                ydl_opts["cookiefile"] = "cookies.txt"
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=False)
         else:
@@ -273,15 +273,16 @@ def fetch_video_title_for_locale(
         "http_headers": {"Accept-Language": accept},
         "extractor_args": {
             "youtube": {
-                "player_client": ["android", "ios"]
+                "player_client": ["android"]
             }
         }
     }
+    # Cookie: ưu tiên cookies.txt trước (static, kiểm soát được)
+    if os.path.exists("cookies.txt"):
+        ydl_opts["cookiefile"] = "cookies.txt"
     browser_name = get_cookie_browser_name(cookie_browser)
     if browser_name:
         ydl_opts["cookiesfrombrowser"] = (browser_name, )
-    elif os.path.exists("cookies.txt"):
-        ydl_opts["cookiefile"] = "cookies.txt"
     try:
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -290,8 +291,6 @@ def fetch_video_title_for_locale(
             err_msg = str(e)
             if "cookiesfrombrowser" in ydl_opts and ("cookie" in err_msg.lower() or "decryption" in err_msg.lower() or "dpapi" in err_msg.lower()):
                 ydl_opts.pop("cookiesfrombrowser", None)
-                if os.path.exists("cookies.txt"):
-                    ydl_opts["cookiefile"] = "cookies.txt"
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     info = ydl.extract_info(url, download=False)
             else:
@@ -452,7 +451,8 @@ def verify_merged_mp4(path: str) -> bool:
         return False
     ffprobe = shutil.which("ffprobe")
     if not ffprobe:
-        return True
+        # Không có ffprobe → chỉ kiểm tra file tồn tại và kích thước tối thiểu
+        return os.path.isfile(path) and os.path.getsize(path) > 1024
     try:
         proc = subprocess.run(
             [
@@ -577,7 +577,7 @@ def download_single_video(
                 },
                 "extractor_args": {
                     "youtube": {
-                        "player_client": ["android", "web"]
+                        "player_client": ["android"]
                     }
                 }
             }
@@ -596,14 +596,20 @@ def download_single_video(
                     }
                 ]
 
-            # Không cấu hình writesubtitles trong ydl_opts nữa để tránh 429 và DPAPI lỗi khi giải mã cookie.
-            # Ta sẽ tải thủ công bằng requests sau khi lấy được info_dict.
+            # Tải phụ đề qua yt-dlp thay vì requests thủ công
+            if download_sub:
+                sub_langs = ",".join(sub_locales) if sub_locales and "all" not in sub_locales else "vi,en"
+                ydl_opts["writesubtitles"] = True
+                ydl_opts["writeautomaticsub"] = True
+                ydl_opts["subtitleslangs"] = [sub_langs]
+                ydl_opts["subtitlesformat"] = "srt"
 
+            # Cookie: ưu tiên cookies.txt trước (static, kiểm soát được)
+            if os.path.exists("cookies.txt"):
+                ydl_opts["cookiefile"] = "cookies.txt"
             browser_name = get_cookie_browser_name(cookie_browser)
             if browser_name:
                 ydl_opts["cookiesfrombrowser"] = (browser_name, )
-            elif os.path.exists("cookies.txt"):
-                ydl_opts["cookiefile"] = "cookies.txt"
             ffmpeg_bin = shutil.which("ffmpeg")
             if ffmpeg_bin:
                 ydl_opts["ffmpeg_location"] = ffmpeg_bin
@@ -611,31 +617,27 @@ def download_single_video(
             if anti_ban:
                 ydl_opts = anti_ban.create_ydl_opts(ydl_opts)
                 if ydl_opts.get("proxy"):
-                    on_log(f"[{index}] 🌐 Proxy: {ydl_opts['proxy']}")
+                    on_log(f"[{index}] Proxy: {ydl_opts['proxy']}")
 
             def progress_hook(d: dict[str, Any]) -> None:
                 if cancelled():
-                    pass
+                    raise yt_dlp.utils.DownloadError("Cancelled by user")
 
             ydl_opts["progress_hooks"] = [progress_hook]
 
             info_dict = None
-            # Nếu chỉ tải sub (không video, không audio) → dùng download=False như test.py
-            # để giảm tải request lên YouTube, tránh bị 429
-            only_sub = download_sub and not download_video and not download_audio
-            do_download = not only_sub
             try:
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    info_dict = ydl.extract_info(url, download=do_download)
+                    info_dict = ydl.extract_info(url, download=not (download_sub and not download_video and not download_audio))
             except yt_dlp.utils.DownloadError as e:
                 err_msg = str(e)
+                if err_msg == "Cancelled by user":
+                    return False
                 if "cookiesfrombrowser" in ydl_opts and ("cookie" in err_msg.lower() or "decryption" in err_msg.lower() or "dpapi" in err_msg.lower()):
-                    on_log(f"[{index}] Lỗi lấy cookie từ trình duyệt {browser_name} (có thể trình duyệt đang mở hoặc bị mã hóa). Đang thử tải lại với cookies.txt hoặc không dùng cookie...")
+                    on_log(f"[{index}] Lỗi lấy cookie từ trình duyệt {browser_name}. Đang thử lại với cookies.txt...")
                     ydl_opts.pop("cookiesfrombrowser", None)
-                    if os.path.exists("cookies.txt"):
-                        ydl_opts["cookiefile"] = "cookies.txt"
                     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                        info_dict = ydl.extract_info(url, download=do_download)
+                        info_dict = ydl.extract_info(url, download=not (download_sub and not download_video and not download_audio))
                 else:
                     raise
 
@@ -647,112 +649,9 @@ def download_single_video(
                     )
                     return False
 
-            # Tải phụ đề thủ công tương tự file test.py bằng requests
-            if download_sub and info_dict:
-                target_sub_folder = sub_folder if sub_folder else output_folder
-                os.makedirs(target_sub_folder, exist_ok=True)
-
-                auto_caps = info_dict.get("automatic_captions", {})
-                manual_subs = info_dict.get("subtitles", {})
-                all_available_langs = set(list(auto_caps.keys()) + list(manual_subs.keys()))
-
-                langs_to_download = []
-                if sub_locales and "all" not in sub_locales:
-                    langs_to_download = [lang for lang in sub_locales if lang in all_available_langs]
-                else:
-                    langs_to_download = list(all_available_langs)
-
-                if langs_to_download:
-                    on_log(f"[{index}] Đang tải phụ đề bằng requests cho các ngôn ngữ: {', '.join(langs_to_download)}...")
-                else:
-                    on_log(f"[{index}] Không tìm thấy phụ đề phù hợp.")
-
-                # ✅ KHÔNG gửi headers và cookies khi tải subtitle (giống test.py)
-                # YouTube subtitle URL là public, gửi cookies/headers khiến YouTube
-                # nhận diện session → rate limit 429
-
-                for lang_code in langs_to_download:
-                    sub_url = None
-                    # ✅ Ưu tiên phụ đề thủ công trước (chính xác hơn, không bị lẫn ngôn ngữ)
-                    if lang_code in manual_subs:
-                        for fmt in manual_subs[lang_code]:
-                            if fmt.get("ext") == "srt":
-                                sub_url = fmt["url"]
-                                break
-                        if not sub_url and manual_subs[lang_code]:
-                            sub_url = manual_subs[lang_code][0].get("url")
-
-                    # Dự phòng: phụ đề tự động (auto-caption)
-                    if not sub_url and lang_code in auto_caps:
-                        for fmt in auto_caps[lang_code]:
-                            if fmt.get("ext") == "srt":
-                                # ✅ Giữ nguyên URL (bao gồm &tlang=) để YouTube trả về đúng ngôn ngữ
-                                sub_url = fmt["url"]
-                                break
-                        if not sub_url and auto_caps[lang_code]:
-                            sub_url = auto_caps[lang_code][0].get("url")
-
-                    if sub_url:
-                        max_sub_retries = 5
-                        sub_success = False
-
-                        # ✅ Tạo session với proxy (giống test.py)
-                        sub_session = requests.Session()
-                        if anti_ban and anti_ban.proxy_list:
-                            sub_proxy = anti_ban.get_next_proxy()
-                            sub_session.proxies = {
-                                "http": sub_proxy,
-                                "https": sub_proxy,
-                            }
-                            on_log(f"[{index}] 🌐 Sub proxy: {sub_proxy}")
-
-                        for sub_attempt in range(max_sub_retries):
-                            try:
-                                # Rate limit: chờ đủ khoảng cách giữa các request phụ đề
-                                global _subtitle_last_request_time
-                                with _subtitle_lock:
-                                    now = time.time()
-                                    elapsed = now - _subtitle_last_request_time
-                                    if elapsed < _SUBTITLE_MIN_INTERVAL:
-                                        wait_time = _SUBTITLE_MIN_INTERVAL - elapsed
-                                        time.sleep(wait_time)
-                                    _subtitle_last_request_time = time.time()
-
-                                # Khi bị 429 retry, đổi proxy mới
-                                if sub_attempt > 0 and anti_ban and anti_ban.proxy_list:
-                                    sub_proxy = anti_ban.get_next_proxy()
-                                    sub_session.proxies = {
-                                        "http": sub_proxy,
-                                        "https": sub_proxy,
-                                    }
-                                    on_log(f"[{index}] 🔄 Đổi proxy: {sub_proxy}")
-
-                                sub_resp = sub_session.get(sub_url, timeout=30)
-                                if sub_resp.status_code == 200:
-                                    sub_filename = f"{index:03d} - {clean_t}.{lang_code}.srt"
-                                    sub_path = os.path.join(target_sub_folder, sub_filename)
-                                    with open(sub_path, "w", encoding="utf-8") as sf:
-                                        sf.write(sub_resp.text)
-                                    on_log(f"[{index}] Đã tải thành công phụ đề ({lang_code}): {title}")
-                                    sub_success = True
-                                    break
-                                elif sub_resp.status_code == 429:
-                                    # Rate limited — chờ rồi thử lại
-                                    backoff_delay = min(10 * (2 ** sub_attempt), 120) + random.uniform(1, 5)
-                                    on_log(f"[{index}] Phụ đề ({lang_code}) bị rate limit (429), chờ {backoff_delay:.0f}s... (lần {sub_attempt+1}/{max_sub_retries})")
-                                    time.sleep(backoff_delay)
-                                    continue
-                                else:
-                                    on_log(f"[{index}] Lỗi tải phụ đề ({lang_code}) HTTP {sub_resp.status_code}: {title}")
-                                    break  # Lỗi khác thì không retry
-                            except Exception as sub_err:
-                                on_log(f"[{index}] Lỗi khi tải phụ đề ({lang_code}): {sub_err}")
-                                if sub_attempt < max_sub_retries - 1:
-                                    time.sleep(5 * (sub_attempt + 1))
-                                    continue
-                                break
-                        if not sub_success:
-                            on_log(f"[{index}] Không thể tải phụ đề ({lang_code}) sau {max_sub_retries} lần thử: {title}")
+            # Di chuyển phụ đề sang sub_folder nếu cần
+            if download_sub and sub_folder and output_folder != sub_folder:
+                move_subtitle_files(output_folder, sub_folder, index, title)
 
             if download_audio and download_video and audio_folder and output_folder != audio_folder:
                 move_audio_files(output_folder, audio_folder, index, title)
@@ -761,6 +660,7 @@ def download_single_video(
                 anti_ban.increment_download_count()
                 if anti_ban.should_change_vpn():
                     anti_ban.change_vpn(on_log)
+                    anti_ban.reset_vpn_counter()
 
             return True
 
@@ -854,9 +754,9 @@ def download_job_batch(
 
     if anti_ban_config:
         anti_ban = AntiBanManager(
-            min_delay=anti_ban_config.get("min_delay", 5.5),
-            max_delay=anti_ban_config.get("max_delay", 15.0),
-            rate_limit=anti_ban_config.get("rate_limit", 5_000_000),
+            min_delay=anti_ban_config.get("min_delay", 8.0),
+            max_delay=anti_ban_config.get("max_delay", 25.0),
+            rate_limit=anti_ban_config.get("rate_limit", 2_000_000),
             proxy_list=anti_ban_config.get("proxy_list"),
             vpn_enabled=anti_ban_config.get("vpn_enabled", False),
             vpn_change_interval=anti_ban_config.get("vpn_change_interval", 30),
@@ -1006,6 +906,12 @@ def download_job_batch(
             if not t_success:
                 item_ok = False
                 log(f"[{i}] (File #{current_idx:03d}) Tải thumbnail thất bại: {title}")
+                if anti_ban_config:
+                    failed_logger.log_failed_url(
+                        f"https://www.youtube.com/watch?v={video_id}",
+                        "thumbnail_download_failed",
+                        str(title),
+                    )
 
         with lock_ok:
             if item_ok:
@@ -1022,7 +928,6 @@ def download_job_batch(
 
     if max_workers > 1:
         log(f"[Parallel] Sử dụng {max_workers} threads để tải...")
-        # Dùng Semaphore để kiểm soát tốc độ submit, tránh gửi hết cùng lúc
         submit_delay = anti_ban.get_random_delay() if anti_ban else 3.0
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {}
@@ -1031,9 +936,9 @@ def download_job_batch(
                     break
                 future = executor.submit(download_single_item, i, vid, title)
                 futures[future] = (i, vid, title)
-                # Delay nhỏ giữa mỗi lần submit để giãn request ra
-                if i < len(videos):
-                    time.sleep(random.uniform(1.0, submit_delay / max_workers))
+                # Chỉ delay giữa mỗi batch max_workers task, không delay mỗi task
+                if i % max_workers == 0 and i < len(videos):
+                    time.sleep(random.uniform(1.0, submit_delay))
             for future in as_completed(futures):
                 if is_cancelled():
                     break

@@ -22,9 +22,9 @@ class AntiBanManager:
 
     def __init__(
         self,
-        min_delay: float = 5.5,
-        max_delay: float = 15.0,
-        rate_limit: int = 10_000_000,
+        min_delay: float = 8.0,
+        max_delay: float = 25.0,
+        rate_limit: int = 2_000_000,
         proxy_list: list[str] | None = None,
         vpn_enabled: bool = False,
         vpn_change_interval: int = 30,
@@ -84,9 +84,13 @@ class AntiBanManager:
             return False
         with self._lock:
             if self._downloaded_count >= self.vpn_change_interval:
-                self._downloaded_count = 0
                 return True
         return False
+
+    def reset_vpn_counter(self) -> None:
+        """Reset bộ đếm VPN — gọi sau khi change_vpn thành công."""
+        with self._lock:
+            self._downloaded_count = 0
 
     def change_vpn(self, log_fn: Callable[[str], None] | None = None) -> bool:
         """Đổi VPN server (cần cài đặt VPN CLI)."""
@@ -157,9 +161,10 @@ class ExponentialBackoff:
         self.retry_count = 0
 
     def get_delay(self) -> float:
-        """Lấy thời gian chờ tiếp theo."""
+        """Lấy thời gian chờ tiếp theo (có jitter +/-20%)."""
         delay = self.base_delay * (2 ** self.retry_count)
-        return min(delay, self.max_delay)
+        jitter = delay * random.uniform(-0.2, 0.2)
+        return min(delay + jitter, self.max_delay)
 
     def should_retry(self) -> bool:
         """Kiểm tra có nên thử lại không."""

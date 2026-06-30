@@ -35,12 +35,7 @@ session.proxies = {
     "http": PROXY,
     "https": PROXY,
 }
-# http://sp08v2-22692:QUNOO@103.67.199.60:22692
-# http://sp08v2-22761:NMFST@103.67.199.60:22761
-# http://sp08v1-17938:JQKWL@103.27.62.179:17938
-# http://sp08-15381:QJIAO@103.179.172.132:15381
-# http://sp08-16251:FACUQ@103.179.173.8:16251
-# http://sp08-14498:MQXHO@103.179.172.29:14498
+
 for index, video in enumerate(videos, start=1):
     video_id = video.get("id")
     title = clean_filename(video.get("title", "no_title"))

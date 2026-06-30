@@ -31,17 +31,18 @@ QLabel#AppSubtitle {
 QFrame#StatCard {
     background-color: #ffffff;
     border: 1px solid #e5e7eb;
-    border-radius: 10px;
-    min-height: 56px;
+    border-radius: 8px;
+    min-height: 36px;
+    max-height: 50px;
 }
 
 QLabel#StatValue {
-    font-size: 22px;
+    font-size: 16px;
     font-weight: 700;
 }
 
 QLabel#StatLabel {
-    font-size: 11px;
+    font-size: 10px;
     color: #6b7280;
 }
 
@@ -82,11 +83,11 @@ QPlainTextEdit {
 QPushButton {
     background-color: #ffffff;
     border: 1px solid #e3e6ea;
-    border-radius: 8px;
-    padding: 8px 14px;
+    border-radius: 6px;
+    padding: 5px 10px;
     font-size: 13px;
     color: #111827;
-    min-height: 20px;
+    min-height: 16px;
 }
 
 QPushButton:hover:enabled {
@@ -163,7 +164,7 @@ QProgressBar {
     border-radius: 8px;
     background-color: #f3f4f6;
     text-align: center;
-    height: 22px;
+    min-height: 26px;
     font-size: 12px;
     color: #374151;
 }
@@ -231,4 +232,50 @@ QLabel#QueueCount {
     font-size: 12px;
     color: #6b7280;
     font-weight: 600;
+}
+
+QScrollArea {
+    border: none;
+    background-color: transparent;
+}
+
+QScrollBar:vertical {
+    background: transparent;
+    width: 8px;
+    margin: 0;
+}
+
+QScrollBar::handle:vertical {
+    background: #d1d5db;
+    border-radius: 4px;
+    min-height: 30px;
+}
+
+QScrollBar::handle:vertical:hover {
+    background: #9ca3af;
+}
+
+QScrollBar::add-line:vertical,
+QScrollBar::sub-line:vertical {
+    height: 0px;
+}
+
+QScrollBar::add-page:vertical,
+QScrollBar::sub-page:vertical {
+    background: transparent;
+}
+
+/* Splitter between settings and queue columns */
+QSplitter::handle {
+    background-color: #d1d5db;
+    border-radius: 3px;
+    margin: 4px 0;
+}
+
+QSplitter::handle:hover {
+    background-color: #9ca3af;
+}
+
+QSplitter::handle:pressed {
+    background-color: #6b7280;
 }
